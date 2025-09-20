@@ -2,25 +2,30 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"chat-app/adapter/filesystem"
-	http_handler "chat-app/adapter/handler/http"
+	httpHandler "chat-app/adapter/handler/http"
 	"chat-app/adapter/handler/ws"
 	"chat-app/adapter/middleware"
 	"chat-app/adapter/postgres"
 	"chat-app/adapter/redis"
 	"chat-app/adapter/util"
 	"chat-app/config"
-	"chat-app/repository"
 	"chat-app/usecase"
 
 	"github.com/go-chi/chi/v5"
-	chi_middleware "github.com/go-chi/chi/v5/middleware"
+	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	_ "github.com/lib/pq"
 )
 
 func fileServer(r chi.Router, path string, root http.FileSystem) {
@@ -49,71 +54,77 @@ func main() {
 
 	db, err := postgres.NewDB(cfg)
 	if err != nil {
-		log.Fatalf("failed to connect to database: %v", err)
+		log.Fatalf("failed to connect to postgres: %v", err)
 	}
 	defer db.Close()
 
-	// Initialize Redis
 	rdb := redis.NewRedisClient(cfg)
 	if _, err := rdb.Ping(context.Background()).Result(); err != nil {
 		log.Fatalf("failed to connect to redis: %v", err)
 	}
+	defer rdb.Close()
 
 	// Repositories
 	userRepo := postgres.NewPostgresUserRepository(db)
 	sessionRepo := postgres.NewPostgresSessionRepository(db)
-	fileRepo := filesystem.NewLocalStorage(cfg.ProfilePicDir, cfg.ProfilePicRoute)
-	friendRepo := postgres.NewPostgresFriendshipRepository(db)
+	friendshipRepo := postgres.NewPostgresFriendshipRepository(db)
 	groupRepo := postgres.NewPostgresGroupRepository(db)
+	fileRepo := filesystem.NewLocalStorage(cfg.ProfilePicDir, cfg.ProfilePicRoute)
 	redisEventRepo := redis.NewRedisEventRepository(rdb)
-	postgresEventRepo := postgres.NewPostgresEventRepository(db)
+	dbEventRepo := postgres.NewPostgresEventRepository(db)
 
 	// Utilities
-	tokenGen := util.NewTokenGenerator(cfg.JWTSecret, cfg.AccessTokenExp, cfg.RefreshTokenExp)
+	tokenGenerator := util.NewTokenGenerator(cfg.JWTSecret, cfg.AccessTokenExp, cfg.RefreshTokenExp)
 
 	// Usecases
-	eventUsecase := usecase.NewEventUsecase(redisEventRepo, postgresEventRepo)
-	authUsecase := usecase.NewAuthUsecase(userRepo, sessionRepo, tokenGen)
+	eventUsecase := usecase.NewEventUsecase(redisEventRepo, dbEventRepo)
+	authUsecase := usecase.NewAuthUsecase(userRepo, sessionRepo, tokenGenerator)
 	userUsecase := usecase.NewUserUsecase(userRepo, fileRepo)
-	friendUsecase := usecase.NewFriendUsecase(userRepo, friendRepo, eventUsecase)
-	groupUsecase := usecase.NewGroupUsecase(groupRepo, userRepo, friendRepo, fileRepo, eventUsecase)
+	friendUsecase := usecase.NewFriendUsecase(userRepo, friendshipRepo, eventUsecase)
+	groupUsecase := usecase.NewGroupUsecase(groupRepo, userRepo, friendshipRepo, fileRepo, eventUsecase)
 
 	// Handlers
-	authHandler := http_handler.NewAuthHandler(authUsecase)
-	userHandler := http_handler.NewUserHandler(userUsecase)
-	friendHandler := http_handler.NewFriendHandler(friendUsecase)
-	groupHandler := http_handler.NewGroupHandler(groupUsecase)
+	authHandler := httpHandler.NewAuthHandler(authUsecase)
+	userHandler := httpHandler.NewUserHandler(userUsecase)
+	friendHandler := httpHandler.NewFriendHandler(friendUsecase)
+	groupHandler := httpHandler.NewGroupHandler(groupUsecase)
+	webHandler := httpHandler.NewWebHandler("web/templates")
 
 	// WebSocket Hub
 	hub := ws.NewHub(eventUsecase, groupUsecase)
 	go hub.Run()
 
-	// Background worker for Redis -> Postgres event persistence
+	// Background worker for event persistence
 	go func() {
-		ticker := time.NewTicker(10 * time.Second) // Run every 10 seconds
+		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
-		for range ticker.C {
-			ctx := context.Background()
-			events, err := redisEventRepo.GetBufferedEvents(ctx, 100)
-			if err != nil || len(events) == 0 {
-				continue
-			}
+		for {
+			select {
+			case <-ticker.C:
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				events, err := redisEventRepo.GetBufferedEvents(ctx, 100)
+				if err != nil || len(events) == 0 {
+					cancel()
+					continue
+				}
 
-			if err := postgresEventRepo.StoreBatch(ctx, events); err != nil {
-				log.Printf("worker: failed to store events in postgres: %v", err)
-				continue // Retry later
-			}
+				if err := dbEventRepo.StoreBatch(ctx, events); err != nil {
+					log.Printf("Error storing event batch to DB: %v", err)
+					cancel()
+					continue
+				}
 
-			if err := redisEventRepo.DeleteBufferedEvents(ctx, events); err != nil {
-				log.Printf("worker: failed to delete events from redis: %v", err)
+				if err := redisEventRepo.DeleteBufferedEvents(ctx, events); err != nil {
+					log.Printf("Error deleting buffered events from Redis: %v", err)
+				}
+				cancel()
 			}
 		}
 	}()
 
-	// Router
 	r := chi.NewRouter()
-
-	r.Use(chi_middleware.Logger)
+	r.Use(chiMiddleware.Recoverer)
+	r.Use(middleware.Logging)
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"http://*", "https://*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
@@ -123,51 +134,75 @@ func main() {
 		MaxAge:           300,
 	}))
 
-	authMiddleware := middleware.NewAuthMiddleware(cfg.JWTSecret)
-
-	// Public routes
-	r.Group(func(r chi.Router) {
-		r.Post("/api/auth/register", userHandler.Register)
-		r.Post("/api/auth/login", authHandler.Login)
-		r.Post("/api/auth/refresh", authHandler.Refresh)
-		r.Post("/api/auth/logout", authHandler.Logout)
+	// Public API routes
+	r.Route("/api/v1", func(r chi.Router) {
+		r.Post("/register", userHandler.Register)
+		r.Post("/login", authHandler.Login)
+		r.Post("/refresh", authHandler.Refresh)
+		r.Post("/logout", authHandler.Logout)
 	})
 
-	// Protected routes
-	r.Group(func(r chi.Router) {
+	// Protected API routes
+	authMiddleware := middleware.NewAuthMiddleware(cfg.JWTSecret)
+	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(authMiddleware.Validate)
 
 		// User routes
-		r.Get("/api/users/{username}", userHandler.GetUserByUsername)
-		r.Put("/api/users/profile", userHandler.UpdateProfile)
+		r.Get("/users/{username}", userHandler.GetUserByUsername)
+		r.Put("/users/me/profile", userHandler.UpdateProfile)
 
 		// Friend routes
-		r.Post("/api/friends/requests", friendHandler.SendRequest)
-		r.Put("/api/friends/requests/{requesterID}", friendHandler.RespondToRequest)
-		r.Delete("/api/friends/{friendID}", friendHandler.Unfriend)
-		r.Get("/api/friends", friendHandler.ListFriends)
-		r.Get("/api/friends/requests/pending", friendHandler.ListPendingRequests)
+		r.Get("/friends", friendHandler.ListFriends)
+		r.Get("/friends/pending", friendHandler.ListPendingRequests)
+		r.Post("/friends/request", friendHandler.SendRequest)
+		r.Put("/friends/request/{requesterID}", friendHandler.RespondToRequest)
+		r.Delete("/friends/{friendID}", friendHandler.Unfriend)
 
 		// Group routes
-		r.Post("/api/groups", groupHandler.CreateGroup)
-		r.Post("/api/groups/join", groupHandler.JoinGroup)
-		r.Post("/api/groups/{groupID}/leave", groupHandler.LeaveGroup)
-		r.Post("/api/groups/{groupID}/members", groupHandler.AddMember)
-		r.Delete("/api/groups/{groupID}/members/{memberID}", groupHandler.RemoveMember)
-		r.Get("/api/groups/search", groupHandler.SearchGroups)
+		r.Post("/groups", groupHandler.CreateGroup)
+		r.Post("/groups/join", groupHandler.JoinGroup)
+		r.Post("/groups/{groupID}/leave", groupHandler.LeaveGroup)
+		r.Post("/groups/{groupID}/members", groupHandler.AddMember)
+		r.Delete("/groups/{groupID}/members/{memberID}", groupHandler.RemoveMember)
+		r.Get("/groups/search", groupHandler.SearchGroups)
 
-		// WebSocket
+		// WebSocket route
 		r.Get("/ws", func(w http.ResponseWriter, r *http.Request) {
 			ws.ServeWs(hub, w, r)
 		})
 	})
 
-	// Serve static files for profile pictures
+	// Serve static files
+	fileServer(r, "/static", http.Dir("web/static"))
 	fileServer(r, cfg.ProfilePicRoute, http.Dir(cfg.ProfilePicDir))
 
-	log.Printf("Server starting on port %s", cfg.ServerPort)
-	if err := http.ListenAndServe(":"+cfg.ServerPort, r); err != nil {
-		log.Fatalf("failed to start server: %v", err)
-	}
-}
+	// Serve Web App
+	r.Get("/", webHandler.ServeApp)
 
+	// Server setup
+	srv := &http.Server{
+		Addr:    ":" + cfg.ServerPort,
+		Handler: r,
+	}
+
+	go func() {
+		log.Printf("Server starting on port %s", cfg.ServerPort)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("listen: %s\n", err)
+		}
+	}()
+
+	// Graceful shutdown
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	log.Println("Shutting down server...")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Fatal("Server forced to shutdown:", err)
+	}
+
+	log.Println("Server exiting")
+}

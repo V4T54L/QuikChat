@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 
 	"chat-app/backend/models"
 	"chat-app/backend/repository"
@@ -101,14 +102,16 @@ func (r *postgresFriendshipRepository) ListByUserID(ctx context.Context, userID 
 	`
 	rows, err := r.db.QueryContext(ctx, query, userID, status)
 	if err != nil {
+		log.Println("Error obtaining friends:", err)
 		return nil, fmt.Errorf("failed to list friends: %w", err)
 	}
 	defer rows.Close()
 
-	var users []*models.User
+	users := make([]*models.User, 0)
 	for rows.Next() {
 		user := &models.User{}
 		if err := rows.Scan(&user.ID, &user.Username, &user.ProfilePicURL, &user.CreatedAt); err != nil {
+			log.Println("Error obtaining friends:", err)
 			return nil, fmt.Errorf("failed to scan user row: %w", err)
 		}
 		users = append(users, user)

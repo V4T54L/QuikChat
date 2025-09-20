@@ -3,7 +3,7 @@
  */
 export const userProfileTemplate = (user) => `
     <div class="flex items-center space-x-4">
-        <img src="${user.profilePicUrl || 'https://via.placeholder.com/40'}" alt="Profile" class="w-10 h-10 rounded-full">
+        <img src="${user.profilePicUrl || 'https://placehold.co/40'}" alt="Profile" class="w-10 h-10 rounded-full">
         <div>
             <h3 class="font-bold">${user.username}</h3>
             <p class="text-sm text-text-dim">Online</p>

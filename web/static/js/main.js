@@ -16,6 +16,7 @@ async function handleLogin(e) {
     ui.toggleButton(button, true);
     try {
         const formData = new FormData(e.target);
+        console.log("Login:", formData)
         const { username, password } = Object.fromEntries(formData.entries());
         const { accessToken, refreshToken } = await api.login(username, password);
         setState({ accessToken, refreshToken });

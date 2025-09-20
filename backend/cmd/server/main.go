@@ -134,7 +134,7 @@ func main() {
 	}))
 
 	// Health and Metrics endpoints
-	router.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	router.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))

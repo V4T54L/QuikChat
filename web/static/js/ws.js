@@ -64,4 +64,3 @@ export const ws = {
         eventListeners.get(eventType).push(callback);
     },
 };
-```

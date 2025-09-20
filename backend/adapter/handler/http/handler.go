@@ -1,7 +1,7 @@
 package http
 
 import (
-	"chat-app/backend/usecase"
+	"chat-app/usecase"
 )
 
 type AuthHandler struct {
@@ -18,5 +18,21 @@ type UserHandler struct {
 
 func NewUserHandler(userUsecase usecase.UserUsecase) *UserHandler {
 	return &UserHandler{userUsecase: userUsecase}
+}
+
+type FriendHandler struct {
+	friendUsecase usecase.FriendUsecase
+}
+
+func NewFriendHandler(friendUsecase usecase.FriendUsecase) *FriendHandler {
+	return &FriendHandler{friendUsecase: friendUsecase}
+}
+
+type GroupHandler struct {
+	groupUsecase usecase.GroupUsecase
+}
+
+func NewGroupHandler(groupUsecase usecase.GroupUsecase) *GroupHandler {
+	return &GroupHandler{groupUsecase: groupUsecase}
 }
 

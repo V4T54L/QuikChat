@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"chat-app/models"
-	"chat-app/repository"
+	"chat-app/backend/models"
+	"chat-app/backend/repository"
 
 	"github.com/google/uuid"
 )
@@ -42,4 +42,3 @@ func (u *eventUsecase) MarkEventAsDelivered(ctx context.Context, eventID uuid.UU
 	// Once delivered, remove from durable storage
 	return u.dbRepo.Delete(ctx, eventID)
 }
-

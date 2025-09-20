@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 
-	"chat-app/models"
-	"chat-app/repository"
+	"chat-app/backend/models"
+	"chat-app/backend/repository"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -204,4 +204,3 @@ func (r *postgresGroupRepository) GetOldestMember(ctx context.Context, groupID u
 	}
 	return user, nil
 }
-

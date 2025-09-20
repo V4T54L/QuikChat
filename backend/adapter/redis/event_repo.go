@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"time"
 
-	"chat-app/models"
-	"chat-app/repository"
+	"chat-app/backend/models"
+	"chat-app/backend/repository"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
@@ -82,4 +82,3 @@ func (r *redisEventRepository) Delete(ctx context.Context, eventID uuid.UUID) er
 func (r *redisEventRepository) StoreBatch(ctx context.Context, events []*models.Event) error {
 	return nil // No-op
 }
-

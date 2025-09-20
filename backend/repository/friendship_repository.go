@@ -1,8 +1,8 @@
 package repository
 
 import (
+	"chat-app/backend/models"
 	"context"
-	"chat-app/models"
 
 	"github.com/google/uuid"
 )
@@ -14,4 +14,3 @@ type FriendshipRepository interface {
 	Find(ctx context.Context, userID1, userID2 uuid.UUID) (*models.Friendship, error)
 	ListByUserID(ctx context.Context, userID uuid.UUID, status models.FriendshipStatus) ([]*models.User, error)
 }
-

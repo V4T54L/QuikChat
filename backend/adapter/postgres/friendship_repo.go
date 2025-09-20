@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 
-	"chat-app/models"
-	"chat-app/repository"
+	"chat-app/backend/models"
+	"chat-app/backend/repository"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -115,4 +115,3 @@ func (r *postgresFriendshipRepository) ListByUserID(ctx context.Context, userID 
 	}
 	return users, nil
 }
-

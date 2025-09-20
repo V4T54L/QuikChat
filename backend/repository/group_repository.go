@@ -1,8 +1,8 @@
 package repository
 
 import (
+	"chat-app/backend/models"
 	"context"
-	"chat-app/models"
 
 	"github.com/google/uuid"
 )
@@ -21,4 +21,3 @@ type GroupRepository interface {
 	ListMembers(ctx context.Context, groupID uuid.UUID) ([]*models.User, error)
 	GetOldestMember(ctx context.Context, groupID uuid.UUID) (*models.User, error)
 }
-

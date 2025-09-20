@@ -4,7 +4,8 @@ import (
 	"log"
 	"net/http"
 
-	"chat-app/adapter/middleware"
+	"chat-app/backend/adapter/middleware"
+
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
@@ -39,4 +40,3 @@ func ServeWs(hub *Hub, w http.ResponseWriter, r *http.Request) {
 	go client.writePump()
 	go client.readPump()
 }
-

@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -21,7 +19,6 @@ import (
 	"chat-app/backend/adapter/redis"
 	"chat-app/backend/adapter/util"
 	"chat-app/backend/config"
-	"chat-app/backend/models"
 	"chat-app/backend/usecase"
 
 	"github.com/go-chi/chi/v5"
@@ -227,4 +224,3 @@ func main() {
 
 	log.Println("Server exiting")
 }
-

@@ -1,10 +1,11 @@
 package repository
 
 import (
+	"chat-app/backend/models"
 	"context"
-	"chat-app/models"
-	"github.com/google/uuid"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type EventRepository interface {
@@ -19,4 +20,3 @@ type EventRepository interface {
 	Delete(ctx context.Context, eventID uuid.UUID) error
 	StoreBatch(ctx context.Context, events []*models.Event) error
 }
-

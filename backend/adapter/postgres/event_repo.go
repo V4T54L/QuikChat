@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"time"
 
-	"chat-app/models"
-	"chat-app/repository"
+	"chat-app/backend/models"
+	"chat-app/backend/repository"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -99,4 +99,3 @@ func (r *postgresEventRepository) GetBufferedEvents(ctx context.Context, count i
 func (r *postgresEventRepository) DeleteBufferedEvents(ctx context.Context, events []*models.Event) error {
 	return nil // No-op
 }
-

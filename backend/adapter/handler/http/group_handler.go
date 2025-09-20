@@ -5,9 +5,9 @@ import (
 	"errors"
 	"net/http"
 
-	"chat-app/adapter/middleware"
-	"chat-app/adapter/util"
-	"chat-app/models"
+	"chat-app/backend/adapter/middleware"
+	"chat-app/backend/adapter/util"
+	"chat-app/backend/models"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -206,4 +206,3 @@ func (h *GroupHandler) SearchGroups(w http.ResponseWriter, r *http.Request) {
 
 	util.RespondWithJSON(w, http.StatusOK, groups)
 }
-

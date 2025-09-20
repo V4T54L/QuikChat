@@ -1,7 +1,8 @@
 package redis
 
 import (
-	"chat-app/config"
+	"chat-app/backend/config"
+
 	"github.com/go-redis/redis/v8"
 )
 
@@ -13,4 +14,3 @@ func NewRedisClient(cfg *config.Config) *redis.Client {
 	})
 	return rdb
 }
-

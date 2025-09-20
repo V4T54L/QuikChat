@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"time"
 
-	"chat-app/models"
-	"chat-app/repository"
+	"chat-app/backend/models"
+	"chat-app/backend/repository"
 
 	"github.com/google/uuid"
 )
@@ -192,4 +192,3 @@ func (u *friendUsecase) ListFriends(ctx context.Context, userID uuid.UUID) ([]*m
 func (u *friendUsecase) ListPendingRequests(ctx context.Context, userID uuid.UUID) ([]*models.User, error) {
 	return u.friendRepo.ListByUserID(ctx, userID, models.FriendshipStatusPending)
 }
-

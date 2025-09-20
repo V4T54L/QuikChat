@@ -2,6 +2,8 @@ package usecase
 
 import (
 	"context"
+	"encoding/json"
+	"time"
 
 	"chat-app/models"
 	"chat-app/repository"
@@ -19,18 +21,24 @@ type FriendUsecase interface {
 }
 
 type friendUsecase struct {
-	userRepo   repository.UserRepository
-	friendRepo repository.FriendshipRepository
+	userRepo     repository.UserRepository
+	friendRepo   repository.FriendshipRepository
+	eventUsecase EventUsecase
 }
 
-func NewFriendUsecase(userRepo repository.UserRepository, friendRepo repository.FriendshipRepository) FriendUsecase {
+func NewFriendUsecase(userRepo repository.UserRepository, friendRepo repository.FriendshipRepository, eventUsecase EventUsecase) FriendUsecase {
 	return &friendUsecase{
-		userRepo:   userRepo,
-		friendRepo: friendRepo,
+		userRepo:     userRepo,
+		friendRepo:   friendRepo,
+		eventUsecase: eventUsecase,
 	}
 }
 
 func (u *friendUsecase) SendRequest(ctx context.Context, fromUserID uuid.UUID, toUsername string) error {
+	if fromUserID.String() == toUsername {
+		return models.ErrCannotFriendSelf
+	}
+
 	toUser, err := u.userRepo.FindByUsername(ctx, toUsername)
 	if err != nil {
 		return err
@@ -41,71 +49,140 @@ func (u *friendUsecase) SendRequest(ctx context.Context, fromUserID uuid.UUID, t
 	}
 
 	// Check if a friendship or request already exists
-	existing, err := u.friendRepo.Find(ctx, fromUserID, toUser.ID)
-	if err != nil && err != models.ErrFriendRequestNotFound {
+	_, err = u.friendRepo.Find(ctx, fromUserID, toUser.ID)
+	if err == nil {
+		return models.ErrFriendRequestExists
+	} else if err != models.ErrFriendRequestNotFound {
 		return err
 	}
-	if existing != nil {
-		if existing.Status == models.FriendshipStatusAccepted {
-			return models.ErrAlreadyFriends
-		}
-		return models.ErrFriendRequestExists
-	}
 
+	// Create friendship request
 	friendship := &models.Friendship{
-		UserID1: fromUserID,
-		UserID2: toUser.ID,
-		Status:  models.FriendshipStatusPending,
+		UserID1:   fromUserID,
+		UserID2:   toUser.ID,
+		Status:    models.FriendshipStatusPending,
+		CreatedAt: time.Now(),
+	}
+	if err := u.friendRepo.Create(ctx, friendship); err != nil {
+		return err
 	}
 
-	return u.friendRepo.Create(ctx, friendship)
+	// Create and store event for the recipient
+	fromUser, err := u.userRepo.FindByID(ctx, fromUserID)
+	if err != nil {
+		return err // Should not happen if fromUserID is from a valid token
+	}
+
+	payload, _ := json.Marshal(fromUser)
+	event := &models.Event{
+		ID:          uuid.New(),
+		Type:        models.EventFriendRequestReceived,
+		Payload:     payload,
+		RecipientID: toUser.ID,
+		SenderID:    &fromUserID,
+		CreatedAt:   time.Now().UTC(),
+	}
+
+	return u.eventUsecase.StoreEvent(ctx, event)
 }
 
 func (u *friendUsecase) AcceptRequest(ctx context.Context, userID, requesterID uuid.UUID) error {
-	friendship, err := u.friendRepo.Find(ctx, userID, requesterID)
+	// Ensure a pending request exists from requesterID to userID
+	fs, err := u.friendRepo.Find(ctx, requesterID, userID)
+	if err != nil {
+		return err
+	}
+	if fs.Status != models.FriendshipStatusPending {
+		return models.ErrFriendRequestNotFound
+	}
+
+	if err := u.friendRepo.UpdateStatus(ctx, requesterID, userID, models.FriendshipStatusAccepted); err != nil {
+		return err
+	}
+
+	// Create and store event for the original requester
+	user, err := u.userRepo.FindByID(ctx, userID)
 	if err != nil {
 		return err
 	}
 
-	if friendship.Status != models.FriendshipStatusPending {
-		return models.ErrFriendRequestNotFound
+	payload, _ := json.Marshal(user)
+	event := &models.Event{
+		ID:          uuid.New(),
+		Type:        models.EventFriendRequestAccepted,
+		Payload:     payload,
+		RecipientID: requesterID,
+		SenderID:    &userID,
+		CreatedAt:   time.Now().UTC(),
 	}
 
-	if friendship.UserID1 != userID && friendship.UserID2 != userID {
-		return models.ErrUnauthorized
-	}
-
-	return u.friendRepo.UpdateStatus(ctx, userID, requesterID, models.FriendshipStatusAccepted)
+	return u.eventUsecase.StoreEvent(ctx, event)
 }
 
 func (u *friendUsecase) RejectRequest(ctx context.Context, userID, requesterID uuid.UUID) error {
-	friendship, err := u.friendRepo.Find(ctx, userID, requesterID)
+	// Ensure a pending request exists from requesterID to userID
+	fs, err := u.friendRepo.Find(ctx, requesterID, userID)
 	if err != nil {
 		return err
 	}
-
-	if friendship.Status != models.FriendshipStatusPending {
+	if fs.Status != models.FriendshipStatusPending {
 		return models.ErrFriendRequestNotFound
 	}
 
-	if friendship.UserID1 != userID && friendship.UserID2 != userID {
-		return models.ErrUnauthorized
+	if err := u.friendRepo.Delete(ctx, requesterID, userID); err != nil {
+		return err
 	}
 
-	return u.friendRepo.Delete(ctx, userID, requesterID)
-}
-
-func (u *friendUsecase) Unfriend(ctx context.Context, userID, friendID uuid.UUID) error {
-	friendship, err := u.friendRepo.Find(ctx, userID, friendID)
+	// Create and store event for the original requester
+	user, err := u.userRepo.FindByID(ctx, userID)
 	if err != nil {
 		return err
 	}
 
-	if friendship.Status != models.FriendshipStatusAccepted {
+	payload, _ := json.Marshal(map[string]string{"username": user.Username})
+	event := &models.Event{
+		ID:          uuid.New(),
+		Type:        models.EventFriendRequestRejected,
+		Payload:     payload,
+		RecipientID: requesterID,
+		SenderID:    &userID,
+		CreatedAt:   time.Now().UTC(),
+	}
+
+	return u.eventUsecase.StoreEvent(ctx, event)
+}
+
+func (u *friendUsecase) Unfriend(ctx context.Context, userID, friendID uuid.UUID) error {
+	// Ensure they are friends
+	fs, err := u.friendRepo.Find(ctx, userID, friendID)
+	if err != nil {
+		return err
+	}
+	if fs.Status != models.FriendshipStatusAccepted {
 		return models.ErrNotFriends
 	}
 
-	return u.friendRepo.Delete(ctx, userID, friendID)
+	if err := u.friendRepo.Delete(ctx, userID, friendID); err != nil {
+		return err
+	}
+
+	// Create and store event for the unfriended user
+	user, err := u.userRepo.FindByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+
+	payload, _ := json.Marshal(map[string]string{"username": user.Username})
+	event := &models.Event{
+		ID:          uuid.New(),
+		Type:        models.EventUnfriended,
+		Payload:     payload,
+		RecipientID: friendID,
+		SenderID:    &userID,
+		CreatedAt:   time.Now().UTC(),
+	}
+
+	return u.eventUsecase.StoreEvent(ctx, event)
 }
 
 func (u *friendUsecase) ListFriends(ctx context.Context, userID uuid.UUID) ([]*models.User, error) {

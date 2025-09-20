@@ -17,11 +17,19 @@ type Config struct {
 	DBName          string
 	DBSslMode       string
 	RedisAddr       string
+	RedisPassword   string
 	JWTSecret       string
 	AccessTokenExp  time.Duration
 	RefreshTokenExp time.Duration
 	ProfilePicDir   string
 	ProfilePicRoute string
+}
+
+func getEnv(key, fallback string) string {
+	if value, ok := os.LookupEnv(key); ok {
+		return value
+	}
+	return fallback
 }
 
 func Load() (*Config, error) {
@@ -32,37 +40,43 @@ func Load() (*Config, error) {
 		}
 	}
 
-	accessTokenExpMin, _ := strconv.Atoi(getEnv("JWT_ACCESS_TOKEN_EXP_MIN", "10"))
-	refreshTokenExpHour, _ := strconv.Atoi(getEnv("JWT_REFRESH_TOKEN_EXP_HOUR", "8"))
+	serverPort := getEnv("SERVER_PORT", "8080")
+	dbHost := getEnv("DB_HOST", "localhost")
+	dbPort := getEnv("DB_PORT", "5432")
+	dbUser := getEnv("DB_USER", "user")
+	dbPassword := getEnv("DB_PASSWORD", "password")
+	dbName := getEnv("DB_NAME", "quikchat")
+	dbSslMode := getEnv("DB_SSLMODE", "disable")
+	redisAddr := getEnv("REDIS_ADDR", "localhost:6379")
+	redisPassword := getEnv("REDIS_PASSWORD", "")
+	jwtSecret := getEnv("JWT_SECRET", "a-very-secret-key-that-is-long-enough")
+	profilePicDir := getEnv("PROFILE_PIC_DIR", "./uploads/profile_pics")
+	profilePicRoute := getEnv("PROFILE_PIC_ROUTE", "/static/profile_pics")
+
+	accessExpMin, _ := strconv.Atoi(getEnv("JWT_ACCESS_TOKEN_EXP_MIN", "10"))
+	refreshExpHour, _ := strconv.Atoi(getEnv("JWT_REFRESH_TOKEN_EXP_HOUR", "8"))
 
 	cfg := &Config{
-		ServerPort:      getEnv("SERVER_PORT", "8080"),
-		DBHost:          getEnv("DB_HOST", "localhost"),
-		DBPort:          getEnv("DB_PORT", "5432"),
-		DBUser:          getEnv("DB_USER", "user"),
-		DBPassword:      getEnv("DB_PASSWORD", "password"),
-		DBName:          getEnv("DB_NAME", "quikchat"),
-		DBSslMode:       getEnv("DB_SSLMODE", "disable"),
-		RedisAddr:       getEnv("REDIS_ADDR", "localhost:6379"),
-		JWTSecret:       getEnv("JWT_SECRET", "a_very_secret_key"),
-		AccessTokenExp:  time.Duration(accessTokenExpMin) * time.Minute,
-		RefreshTokenExp: time.Duration(refreshTokenExpHour) * time.Hour,
-		ProfilePicDir:   getEnv("PROFILE_PIC_DIR", "./uploads/profile_pics"),
-		ProfilePicRoute: getEnv("PROFILE_PIC_ROUTE", "/static/profile_pics/"),
+		ServerPort:      serverPort,
+		DBHost:          dbHost,
+		DBPort:          dbPort,
+		DBUser:          dbUser,
+		DBPassword:      dbPassword,
+		DBName:          dbName,
+		DBSslMode:       dbSslMode,
+		RedisAddr:       redisAddr,
+		RedisPassword:   redisPassword,
+		JWTSecret:       jwtSecret,
+		AccessTokenExp:  time.Duration(accessExpMin) * time.Minute,
+		RefreshTokenExp: time.Duration(refreshExpHour) * time.Hour,
+		ProfilePicDir:   profilePicDir,
+		ProfilePicRoute: profilePicRoute,
 	}
 
-	// Ensure profile pic directory exists
 	if err := os.MkdirAll(cfg.ProfilePicDir, os.ModePerm); err != nil {
 		return nil, err
 	}
 
 	return cfg, nil
-}
-
-func getEnv(key, fallback string) string {
-	if value, exists := os.LookupEnv(key); exists {
-		return value
-	}
-	return fallback
 }
 

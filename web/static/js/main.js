@@ -1,136 +1,143 @@
 import { api } from './api.js';
 import { getState, setState } from './state.js';
 import { ui } from './ui.js';
-import { ws }_ from './ws.js';
+import { ws } from './ws.js';
 
-document.addEventListener('DOMContentLoaded', () => {
-    const loginForm = document.getElementById('login-form');
-    const registerForm = document.getElementById('register-form');
-    const messageForm = document.getElementById('message-form');
-    const logoutBtn = document.getElementById('logout-btn');
-    const loginTabBtn = document.getElementById('login-tab-btn');
-    const registerTabBtn = document.getElementById('register-tab-btn');
+const loginForm = document.getElementById('login-form');
+const registerForm = document.getElementById('register-form');
+const messageForm = document.getElementById('message-form');
+const logoutBtn = document.getElementById('logout-btn');
+const loginTabBtn = document.getElementById('login-tab-btn');
+const registerTabBtn = document.getElementById('register-tab-btn');
 
-    const handleLogin = async (e) => {
-        e.preventDefault();
-        const username = document.getElementById('login-username').value;
-        const password = document.getElementById('login-password').value;
-        try {
-            const data = await api.login(username, password);
-            setState({ 
-                accessToken: data.access_token, 
-                refreshToken: data.refresh_token,
-            });
-            awaitinitializeApp();
-        } catch (error) {
-            ui.showAuthError(error.message);
+async function handleLogin(e) {
+    e.preventDefault();
+    const button = e.target.querySelector('button');
+    ui.toggleButton(button, true);
+    try {
+        const formData = new FormData(e.target);
+        const { username, password } = Object.fromEntries(formData.entries());
+        const { accessToken, refreshToken } = await api.login(username, password);
+        setState({ accessToken, refreshToken });
+        await initializeApp();
+    } catch (error) {
+        ui.showAuthError(error.message);
+    } finally {
+        ui.toggleButton(button, false);
+    }
+}
+
+async function handleRegister(e) {
+    e.preventDefault();
+    const button = e.target.querySelector('button');
+    ui.toggleButton(button, true);
+    try {
+        const formData = new FormData(e.target);
+        const { username, password } = Object.fromEntries(formData.entries());
+        await api.register(username, password);
+        alert('Registration successful! Please log in.');
+        e.target.reset();
+        ui.switchAuthTab('login');
+    } catch (error) {
+        ui.showAuthError(error.message);
+    } finally {
+        ui.toggleButton(button, false);
+    }
+}
+
+async function handleLogout() {
+    try {
+        const { refreshToken } = getState();
+        if (refreshToken) {
+            await api.logout(refreshToken);
         }
-    };
+    } catch (error) {
+        console.error('Logout failed:', error);
+    } finally {
+        ws.disconnect();
+        setState({
+            currentUser: null,
+            accessToken: null,
+            refreshToken: null,
+            friends: [],
+            groups: [],
+            activeChat: null,
+        });
+        ui.showView('auth');
+    }
+}
 
-    const handleRegister = async (e) => {
-        e.preventDefault();
-        const username = document.getElementById('register-username').value;
-        const password = document.getElementById('register-password').value;
-        try {
-            const user = await api.register(username, password);
-            alert(`Registration successful for ${user.username}! Please log in.`);
-            ui.switchAuthTab('login');
-            document.getElementById('login-username').value = username;
-            document.getElementById('login-password').focus();
-        } catch (error) {
-            ui.showAuthError(error.message);
+function handleSendMessage(e) {
+    e.preventDefault();
+    const { activeChat } = getState();
+    const input = e.target.elements.message;
+    const content = input.value.trim();
+
+    if (content && activeChat) {
+        const payload = {
+            content,
+            recipientId: activeChat.id,
+        };
+        ws.sendMessage({ type: 'message_sent', payload });
+        ui.clearMessageInput();
+    }
+}
+
+function setupWsListeners() {
+    ws.onEvent('message_sent', (message) => {
+        const { currentUser, activeChat } = getState();
+        if (
+            activeChat &&
+            (message.recipientId === activeChat.id || message.senderId === activeChat.id)
+        ) {
+            ui.renderMessage(message, message.senderId === currentUser.id);
         }
-    };
+        // TODO: Add notification for inactive chats
+    });
 
-    const handleLogout = async () => {
-        try {
-            const { refreshToken } = getState();
-            if (refreshToken) {
-                await api.logout(refreshToken);
-            }
-        } catch (error) {
-            console.error('Logout failed:', error);
-        } finally {
-            ws.disconnect();
-            setState({
-                currentUser: null,
-                accessToken: null,
-                refreshToken: null,
-                friends: [],
-                groups: [],
-                activeChat: null,
-            });
-            ui.showView('auth');
-        }
-    };
+    ws.onEvent('message_ack', (payload) => {
+        console.log('Message acknowledged:', payload.messageId);
+        // Can be used to update message status to "sent"
+    });
+}
 
-    const handleSendMessage = (e) => {
-        e.preventDefault();
-        const input = document.getElementById('message-input');
-        const content = input.value.trim();
-        const { activeChat } = getState();
+async function initializeApp() {
+    ui.showView('chat');
+    const { accessToken } = getState();
 
-        if (content && activeChat) {
-            ws.sendMessage({
-                type: 'message_sent',
-                payload: {
-                    content,
-                    recipientId: activeChat.id,
-                },
-            });
-            input.value = '';
-        }
-    };
-
-    const initializeApp = async () => {
-        ui.showView('chat');
-        
-        // Mock current user data - a real app would have a /users/me endpoint
-        const { accessToken } = getState();
-        const decodedToken = JSON.parse(atob(accessToken.split('.')[1]));
-        const currentUser = { id: decodedToken.user_id, username: 'You' }; // Username is a placeholder
+    try {
+        // Mock current user from token until we have a /me endpoint
+        const tokenPayload = JSON.parse(atob(accessToken.split('.')[1]));
+        const currentUser = { id: tokenPayload.user_id, username: 'You' }; // Username is a placeholder
         setState({ currentUser });
 
         ui.renderUserProfile(currentUser);
 
         ws.connect(accessToken);
+        setupWsListeners();
 
-        try {
-            const [friends, groups] = await Promise.all([
-                api.getFriends(),
-                api.getGroups(), // Mocked
-            ]);
-            setState({ friends, groups });
-            ui.renderFriendList(friends);
-            ui.renderGroupList(groups);
-        } catch (error) {
-            console.error('Failed to fetch initial data:', error);
-            handleLogout();
-        }
-    };
+        const friends = await api.getFriends();
+        setState({ friends });
+        ui.renderFriendList(friends);
 
-    // Event Listeners
-    loginForm.addEventListener('submit', handleLogin);
-    registerForm.addEventListener('submit', handleRegister);
-    messageForm.addEventListener('submit', handleSendMessage);
-    logoutBtn.addEventListener('click', handleLogout);
-    loginTabBtn.addEventListener('click', () => ui.switchAuthTab('login'));
-    registerTabBtn.addEventListener('click', () => ui.switchAuthTab('register'));
+        const groups = await api.getGroups();
+        setState({ groups });
+        ui.renderGroupList(groups);
+    } catch (error) {
+        console.error('Initialization failed:', error);
+        await handleLogout();
+    }
+}
 
-    // WebSocket Event Handlers
-    ws.onEvent('message_sent', (message) => {
-        const { activeChat, currentUser } = getState();
-        if (activeChat && (message.recipientId === activeChat.id || message.senderId === activeChat.id)) {
-            ui.renderMessage(message, message.senderId === currentUser.id);
-        }
-    });
+// Event Listeners
+loginForm.addEventListener('submit', handleLogin);
+registerForm.addEventListener('submit', handleRegister);
+messageForm.addEventListener('submit', handleSendMessage);
+logoutBtn.addEventListener('click', handleLogout);
+loginTabBtn.addEventListener('click', () => ui.switchAuthTab('login'));
+registerTabBtn.addEventListener('click', () => ui.switchAuthTab('register'));
 
-    ws.onEvent('message_ack', (ack) => {
-        console.log('Message acknowledged:', ack);
-        // Here you could update the UI to show a "sent" checkmark
-    });
-
-    // Initial UI setup
-    ui.showView('auth');
-});
+// Initial check (e.g., for a stored refresh token) could go here
+// For now, we start at the auth view.
+ui.showView('auth');
 

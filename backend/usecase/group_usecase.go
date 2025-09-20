@@ -3,12 +3,13 @@ package usecase
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"mime/multipart"
 	"time"
 
-	"chat-app/adapter/util"
-	"chat-app/models"
-	"chat-app/repository"
+	"chat-app/backend/adapter/util"
+	"chat-app/backend/models"
+	"chat-app/backend/repository"
 
 	"github.com/google/uuid"
 )
@@ -48,9 +49,12 @@ func (u *groupUsecase) CreateGroup(ctx context.Context, ownerID uuid.UUID, handl
 	if err := util.ValidateGroupHandle(handle); err != nil {
 		return nil, err
 	}
+	if name == "" || len(name) > 100 {
+		return nil, fmt.Errorf("group name must be between 1 and 100 characters: %w", models.ErrBadRequest)
+	}
 
 	var photoURL string
-	if photo != nil {
+	if photo != nil && photoHeader != nil {
 		if err := util.ValidateProfilePic(photoHeader); err != nil {
 			return nil, err
 		}
@@ -88,10 +92,13 @@ func (u *groupUsecase) UpdateGroup(ctx context.Context, userID, groupID uuid.UUI
 	}
 
 	if name != nil {
+		if *name == "" || len(*name) > 100 {
+			return nil, fmt.Errorf("group name must be between 1 and 100 characters: %w", models.ErrBadRequest)
+		}
 		group.Name = *name
 	}
 
-	if photo != nil {
+	if photo != nil && photoHeader != nil {
 		if err := util.ValidateProfilePic(photoHeader); err != nil {
 			return nil, err
 		}
@@ -125,31 +132,13 @@ func (u *groupUsecase) JoinGroup(ctx context.Context, userID uuid.UUID, groupHan
 		return err
 	}
 
-	// Generate events
-	user, _ := u.userRepo.FindByID(ctx, userID)
-
-	// Event for other group members
-	eventPayload, _ := json.Marshal(map[string]string{
-		"groupId":   group.ID.String(),
+	// Notify other group members
+	go u.notifyGroupMembers(context.Background(), group.ID, userID, models.EventUserJoinedGroup, map[string]interface{}{
+		"groupId":   group.ID,
 		"groupName": group.Name,
-		"userId":    user.ID.String(),
-		"userName":  user.Username,
+		"userId":    userID,
 	})
 
-	members, _ := u.groupRepo.ListMembers(ctx, group.ID)
-	for _, m := range members {
-		if m.ID != userID {
-			event := &models.Event{
-				ID:          uuid.New(),
-				Type:        models.EventUserJoinedGroup,
-				Payload:     eventPayload,
-				RecipientID: m.ID,
-				SenderID:    &userID,
-				CreatedAt:   time.Now().UTC(),
-			}
-			u.eventUsecase.StoreEvent(ctx, event)
-		}
-	}
 	return nil
 }
 
@@ -159,9 +148,8 @@ func (u *groupUsecase) LeaveGroup(ctx context.Context, userID, groupID uuid.UUID
 		return err
 	}
 
-	user, err := u.userRepo.FindByID(ctx, userID)
-	if err != nil {
-		return err
+	if _, err := u.groupRepo.FindMember(ctx, groupID, userID); err != nil {
+		return models.ErrNotGroupMember
 	}
 
 	members, err := u.groupRepo.ListMembers(ctx, groupID)
@@ -173,37 +161,23 @@ func (u *groupUsecase) LeaveGroup(ctx context.Context, userID, groupID uuid.UUID
 		return err
 	}
 
-	// Generate event for remaining members
-	eventPayload, _ := json.Marshal(map[string]string{
-		"groupId":   group.ID.String(),
+	// Notify remaining members
+	go u.notifyGroupMembers(context.Background(), groupID, userID, models.EventUserLeftGroup, map[string]interface{}{
+		"groupId":   groupID,
 		"groupName": group.Name,
-		"userId":    user.ID.String(),
-		"userName":  user.Username,
+		"userId":    userID,
 	})
-
-	for _, m := range members {
-		if m.ID != userID {
-			event := &models.Event{
-				ID:          uuid.New(),
-				Type:        models.EventUserLeftGroup,
-				Payload:     eventPayload,
-				RecipientID: m.ID,
-				SenderID:    &userID,
-				CreatedAt:   time.Now().UTC(),
-			}
-			u.eventUsecase.StoreEvent(ctx, event)
-		}
-	}
 
 	// Handle ownership transfer or group deletion
 	if group.OwnerID == userID {
-		if len(members)-1 == 0 {
-			// Last member left, delete group
+		if len(members) == 1 { // The owner was the last member
 			return u.groupRepo.Delete(ctx, groupID)
 		}
-		// Transfer ownership to the oldest member
+
 		oldestMember, err := u.groupRepo.GetOldestMember(ctx, groupID)
 		if err != nil {
+			// This case should be rare, but if it happens, delete the group
+			u.groupRepo.Delete(ctx, groupID)
 			return err
 		}
 		group.OwnerID = oldestMember.ID
@@ -215,8 +189,7 @@ func (u *groupUsecase) LeaveGroup(ctx context.Context, userID, groupID uuid.UUID
 
 func (u *groupUsecase) AddMember(ctx context.Context, adderID uuid.UUID, newMemberUsername string, groupID uuid.UUID) error {
 	// Check if adder is a member
-	_, err := u.groupRepo.FindMember(ctx, groupID, adderID)
-	if err != nil {
+	if _, err := u.groupRepo.FindMember(ctx, groupID, adderID); err != nil {
 		return models.ErrNotGroupMember
 	}
 
@@ -225,7 +198,7 @@ func (u *groupUsecase) AddMember(ctx context.Context, adderID uuid.UUID, newMemb
 		return err
 	}
 
-	// Check if adder and new member are friends
+	// Check if they are friends
 	fs, err := u.friendRepo.Find(ctx, adderID, newMember.ID)
 	if err != nil || fs.Status != models.FriendshipStatusAccepted {
 		return models.ErrNotFriends
@@ -241,48 +214,26 @@ func (u *groupUsecase) AddMember(ctx context.Context, adderID uuid.UUID, newMemb
 		return err
 	}
 
-	// Generate events
-	adder, _ := u.userRepo.FindByID(ctx, adderID)
-	group, _ := u.groupRepo.FindByID(ctx, groupID)
+	group, err := u.groupRepo.FindByID(ctx, groupID)
+	if err != nil {
+		return err // Group should exist, but handle error just in case
+	}
 
-	// Event for the new member
-	addedPayload, _ := json.Marshal(map[string]string{
-		"groupId":   group.ID.String(),
+	// Notify the new member
+	go u.notifyUser(context.Background(), newMember.ID, adderID, models.EventAddedToGroup, map[string]interface{}{
+		"groupId":   groupID,
 		"groupName": group.Name,
-		"adderName": adder.Username,
+		"adderId":   adderID,
 	})
-	addedEvent := &models.Event{
-		ID:          uuid.New(),
-		Type:        models.EventAddedToGroup,
-		Payload:     addedPayload,
-		RecipientID: newMember.ID,
-		SenderID:    &adderID,
-		CreatedAt:   time.Now().UTC(),
-	}
-	u.eventUsecase.StoreEvent(ctx, addedEvent)
 
-	// Event for other group members
-	members, _ := u.groupRepo.ListMembers(ctx, groupID)
-	memberNotifPayload, _ := json.Marshal(map[string]string{
-		"groupId":       group.ID.String(),
-		"groupName":     group.Name,
-		"adderName":     adder.Username,
-		"newMemberId":   newMember.ID.String(),
-		"newMemberName": newMember.Username,
+	// Notify other group members
+	go u.notifyGroupMembers(context.Background(), groupID, newMember.ID, models.EventUserJoinedGroup, map[string]interface{}{
+		"groupId":   groupID,
+		"groupName": group.Name,
+		"userId":    newMember.ID,
+		"adderId":   adderID,
 	})
-	for _, m := range members {
-		if m.ID != newMember.ID && m.ID != adder.ID {
-			event := &models.Event{
-				ID:          uuid.New(),
-				Type:        models.EventUserJoinedGroup, // Re-using this for simplicity
-				Payload:     memberNotifPayload,
-				RecipientID: m.ID,
-				SenderID:    &adderID,
-				CreatedAt:   time.Now().UTC(),
-			}
-			u.eventUsecase.StoreEvent(ctx, event)
-		}
-	}
+
 	return nil
 }
 
@@ -304,46 +255,21 @@ func (u *groupUsecase) RemoveMember(ctx context.Context, ownerID, memberID, grou
 		return err
 	}
 
-	// Generate events
-	owner, _ := u.userRepo.FindByID(ctx, ownerID)
-	removedMember, _ := u.userRepo.FindByID(ctx, memberID)
-
-	// Event for the removed member
-	removedPayload, _ := json.Marshal(map[string]string{
-		"groupId":     group.ID.String(),
-		"groupName":   group.Name,
-		"removerName": owner.Username,
+	// Notify the removed member
+	go u.notifyUser(context.Background(), memberID, ownerID, models.EventRemovedFromGroup, map[string]interface{}{
+		"groupId":   groupID,
+		"groupName": group.Name,
+		"removerId": ownerID,
 	})
-	removedEvent := &models.Event{
-		ID:          uuid.New(),
-		Type:        models.EventRemovedFromGroup,
-		Payload:     removedPayload,
-		RecipientID: removedMember.ID,
-		SenderID:    &ownerID,
-		CreatedAt:   time.Now().UTC(),
-	}
-	u.eventUsecase.StoreEvent(ctx, removedEvent)
 
-	// Event for other group members
-	members, _ := u.groupRepo.ListMembers(ctx, groupID)
-	memberNotifPayload, _ := json.Marshal(map[string]string{
-		"groupId":           group.ID.String(),
-		"groupName":         group.Name,
-		"removerName":       owner.Username,
-		"removedMemberId":   removedMember.ID.String(),
-		"removedMemberName": removedMember.Username,
+	// Notify other group members
+	go u.notifyGroupMembers(context.Background(), groupID, memberID, models.EventUserLeftGroup, map[string]interface{}{
+		"groupId":   groupID,
+		"groupName": group.Name,
+		"userId":    memberID,
+		"removerId": ownerID,
 	})
-	for _, m := range members {
-		event := &models.Event{
-			ID:          uuid.New(),
-			Type:        models.EventUserLeftGroup, // Re-using this for simplicity
-			Payload:     memberNotifPayload,
-			RecipientID: m.ID,
-			SenderID:    &ownerID,
-			CreatedAt:   time.Now().UTC(),
-		}
-		u.eventUsecase.StoreEvent(ctx, event)
-	}
+
 	return nil
 }
 
@@ -357,8 +283,7 @@ func (u *groupUsecase) TransferOwnership(ctx context.Context, currentOwnerID, ne
 		return models.ErrNotGroupOwner
 	}
 
-	_, err = u.groupRepo.FindMember(ctx, groupID, newOwnerID)
-	if err != nil {
+	if _, err := u.groupRepo.FindMember(ctx, groupID, newOwnerID); err != nil {
 		return models.ErrNotGroupMember
 	}
 
@@ -376,5 +301,41 @@ func (u *groupUsecase) GetGroupDetails(ctx context.Context, groupID uuid.UUID) (
 
 func (u *groupUsecase) ListGroupMembers(ctx context.Context, groupID uuid.UUID) ([]*models.User, error) {
 	return u.groupRepo.ListMembers(ctx, groupID)
+}
+
+func (u *groupUsecase) notifyGroupMembers(ctx context.Context, groupID, subjectUserID uuid.UUID, eventType models.EventType, payload map[string]interface{}) {
+	members, err := u.groupRepo.ListMembers(ctx, groupID)
+	if err != nil {
+		return
+	}
+
+	jsonPayload, _ := json.Marshal(payload)
+
+	for _, member := range members {
+		if member.ID == subjectUserID {
+			continue
+		}
+		event := &models.Event{
+			ID:          uuid.New(),
+			Type:        eventType,
+			Payload:     jsonPayload,
+			RecipientID: member.ID,
+			CreatedAt:   time.Now(),
+		}
+		u.eventUsecase.StoreEvent(ctx, event)
+	}
+}
+
+func (u *groupUsecase) notifyUser(ctx context.Context, recipientID, senderID uuid.UUID, eventType models.EventType, payload map[string]interface{}) {
+	jsonPayload, _ := json.Marshal(payload)
+	event := &models.Event{
+		ID:          uuid.New(),
+		Type:        eventType,
+		Payload:     jsonPayload,
+		RecipientID: recipientID,
+		SenderID:    &senderID,
+		CreatedAt:   time.Now(),
+	}
+	u.eventUsecase.StoreEvent(ctx, event)
 }
 

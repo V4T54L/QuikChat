@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"strings"
+	"sync"
 	"time"
 
-	"chat-app/models"
-	"chat-app/usecase"
+	"chat-app/backend/models"
+	"chat-app/backend/usecase"
 	"github.com/google/uuid"
 )
 
@@ -30,6 +32,7 @@ type Hub struct {
 	// Event usecase
 	eventUsecase usecase.EventUsecase
 	groupUsecase usecase.GroupUsecase
+	mu           sync.RWMutex
 }
 
 func NewHub(eventUsecase usecase.EventUsecase, groupUsecase usecase.GroupUsecase) *Hub {
@@ -47,16 +50,26 @@ func (h *Hub) Run() {
 	for {
 		select {
 		case client := <-h.register:
+			h.mu.Lock()
 			h.clients[client.userID] = client
+			h.mu.Unlock()
 		case client := <-h.unregister:
+			h.mu.Lock()
 			if _, ok := h.clients[client.userID]; ok {
 				delete(h.clients, client.userID)
 				close(client.send)
 			}
+			h.mu.Unlock()
 		case clientMessage := <-h.broadcast:
 			h.handleMessage(clientMessage.client, clientMessage.message)
 		}
 	}
+}
+
+func (h *Hub) GetClientCount() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.clients)
 }
 
 func (h *Hub) handleMessage(sender *Client, rawMessage []byte) {
@@ -67,18 +80,28 @@ func (h *Hub) handleMessage(sender *Client, rawMessage []byte) {
 	}
 
 	switch msg.Type {
-	case string(models.EventMessageSent):
+	case "message_sent":
 		var inbound InboundMessage
 		if err := json.Unmarshal(msg.Payload, &inbound); err != nil {
 			log.Printf("error unmarshalling inbound message payload: %v", err)
 			return
 		}
+
+		content := strings.TrimSpace(inbound.Content)
+		if len(content) == 0 || len(content) > 200 {
+			log.Printf("invalid message length from user %s", sender.userID)
+			return
+		}
+		inbound.Content = content
+
 		h.processAndRelayMessage(sender.userID, inbound)
+	default:
+		log.Printf("unknown message type: %s", msg.Type)
 	}
 }
 
 func (h *Hub) processAndRelayMessage(senderID uuid.UUID, inbound InboundMessage) {
-	// Create an event for the message
+	ctx := context.Background()
 	outboundPayload := OutboundMessage{
 		ID:          uuid.New(),
 		Content:     inbound.Content,
@@ -88,16 +111,18 @@ func (h *Hub) processAndRelayMessage(senderID uuid.UUID, inbound InboundMessage)
 	}
 	payloadBytes, _ := json.Marshal(outboundPayload)
 
-	// Check if recipient is a group or a user
-	members, err := h.groupUsecase.ListGroupMembers(context.Background(), inbound.RecipientID)
-	isGroup := err == nil && len(members) > 0
-
 	var recipients []uuid.UUID
-	if isGroup {
+
+	// Check if recipient is a group or a user
+	group, err := h.groupUsecase.GetGroupDetails(ctx, inbound.RecipientID)
+	if err == nil && group != nil {
+		members, err := h.groupUsecase.ListGroupMembers(ctx, group.ID)
+		if err != nil {
+			log.Printf("error listing group members: %v", err)
+			return
+		}
 		for _, member := range members {
-			if member.ID != senderID { // Don't send to self
-				recipients = append(recipients, member.ID)
-			}
+			recipients = append(recipients, member.ID)
 		}
 	} else {
 		recipients = append(recipients, inbound.RecipientID)
@@ -113,7 +138,7 @@ func (h *Hub) processAndRelayMessage(senderID uuid.UUID, inbound InboundMessage)
 			SenderID:    &senderID,
 			CreatedAt:   time.Now().UTC(),
 		}
-		if err := h.eventUsecase.StoreEvent(context.Background(), event); err != nil {
+		if err := h.eventUsecase.StoreEvent(ctx, event); err != nil {
 			log.Printf("failed to store event: %v", err)
 			continue
 		}
@@ -121,10 +146,16 @@ func (h *Hub) processAndRelayMessage(senderID uuid.UUID, inbound InboundMessage)
 	}
 
 	// Send acknowledgment back to sender
+	ackPayload, err := json.Marshal(map[string]string{"messageId": outboundPayload.ID.String()})
+	if err != nil {
+		log.Printf("error marshalling ack payload: %v", err)
+		return
+	}
+
 	ackEvent := &models.Event{
-		ID:          outboundPayload.ID, // Use message ID for ack
+		ID:          uuid.New(), // New ID for the ack event itself
 		Type:        models.EventMessageAck,
-		Payload:     payloadBytes,
+		Payload:     ackPayload,
 		RecipientID: senderID,
 		CreatedAt:   time.Now().UTC(),
 	}
@@ -133,18 +164,23 @@ func (h *Hub) processAndRelayMessage(senderID uuid.UUID, inbound InboundMessage)
 
 // DeliverEvent sends a single event to a connected client if they are online.
 func (h *Hub) DeliverEvent(event *models.Event) {
-	if client, ok := h.clients[event.RecipientID]; ok {
-		data, err := json.Marshal(event)
-		if err != nil {
-			log.Printf("error marshalling event for delivery: %v", err)
-			return
-		}
+	payload, err := json.Marshal(event)
+	if err != nil {
+		log.Printf("error marshalling event for delivery: %v", err)
+		return
+	}
+
+	h.mu.RLock()
+	client, ok := h.clients[event.RecipientID]
+	h.mu.RUnlock()
+
+	if ok {
 		select {
-		case client.send <- data:
+		case client.send <- payload:
 		default:
-			// Client's send buffer is full, assume they are lagging and disconnect.
-			close(client.send)
-			delete(h.clients, client.userID)
+			// Client's send buffer is full, assume it's lagging and disconnect.
+			log.Printf("client %s lagging, disconnecting", client.userID)
+			h.unregister <- client
 		}
 	}
 }

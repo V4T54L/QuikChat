@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -12,15 +13,16 @@ import (
 	"syscall"
 	"time"
 
-	"chat-app/adapter/filesystem"
-	httpHandler "chat-app/adapter/handler/http"
-	"chat-app/adapter/handler/ws"
-	"chat-app/adapter/middleware"
-	"chat-app/adapter/postgres"
-	"chat-app/adapter/redis"
-	"chat-app/adapter/util"
-	"chat-app/config"
-	"chat-app/usecase"
+	"chat-app/backend/adapter/filesystem"
+	httpHandler "chat-app/backend/adapter/handler/http"
+	"chat-app/backend/adapter/handler/ws"
+	"chat-app/backend/adapter/middleware"
+	"chat-app/backend/adapter/postgres"
+	"chat-app/backend/adapter/redis"
+	"chat-app/backend/adapter/util"
+	"chat-app/backend/config"
+	"chat-app/backend/models"
+	"chat-app/backend/usecase"
 
 	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
@@ -36,7 +38,7 @@ func fileServer(r chi.Router, path string, root http.FileSystem) {
 	fs := http.StripPrefix(path, http.FileServer(root))
 
 	if path != "/" && path[len(path)-1] != '/' {
-		r.Get(path, http.RedirectHandler(path+"/", 301).ServeHTTP)
+		r.Get(path, http.RedirectHandler(path+"/", http.StatusMovedPermanently).ServeHTTP)
 		path += "/"
 	}
 	path += "*"
@@ -67,28 +69,28 @@ func main() {
 	// Repositories
 	userRepo := postgres.NewPostgresUserRepository(db)
 	sessionRepo := postgres.NewPostgresSessionRepository(db)
-	friendshipRepo := postgres.NewPostgresFriendshipRepository(db)
+	friendRepo := postgres.NewPostgresFriendshipRepository(db)
 	groupRepo := postgres.NewPostgresGroupRepository(db)
 	fileRepo := filesystem.NewLocalStorage(cfg.ProfilePicDir, cfg.ProfilePicRoute)
 	redisEventRepo := redis.NewRedisEventRepository(rdb)
 	dbEventRepo := postgres.NewPostgresEventRepository(db)
 
 	// Utilities
-	tokenGenerator := util.NewTokenGenerator(cfg.JWTSecret, cfg.AccessTokenExp, cfg.RefreshTokenExp)
+	tokenGen := util.NewTokenGenerator(cfg.JWTSecret, cfg.AccessTokenExp, cfg.RefreshTokenExp)
 
 	// Usecases
 	eventUsecase := usecase.NewEventUsecase(redisEventRepo, dbEventRepo)
-	authUsecase := usecase.NewAuthUsecase(userRepo, sessionRepo, tokenGenerator)
+	authUsecase := usecase.NewAuthUsecase(userRepo, sessionRepo, tokenGen)
 	userUsecase := usecase.NewUserUsecase(userRepo, fileRepo)
-	friendUsecase := usecase.NewFriendUsecase(userRepo, friendshipRepo, eventUsecase)
-	groupUsecase := usecase.NewGroupUsecase(groupRepo, userRepo, friendshipRepo, fileRepo, eventUsecase)
+	friendUsecase := usecase.NewFriendUsecase(userRepo, friendRepo, eventUsecase)
+	groupUsecase := usecase.NewGroupUsecase(groupRepo, userRepo, friendRepo, fileRepo, eventUsecase)
 
 	// Handlers
 	authHandler := httpHandler.NewAuthHandler(authUsecase)
 	userHandler := httpHandler.NewUserHandler(userUsecase)
 	friendHandler := httpHandler.NewFriendHandler(friendUsecase)
 	groupHandler := httpHandler.NewGroupHandler(groupUsecase)
-	webHandler := httpHandler.NewWebHandler("web/templates")
+	webHandler := httpHandler.NewWebHandler("./web/templates")
 
 	// WebSocket Hub
 	hub := ws.NewHub(eventUsecase, groupUsecase)
@@ -103,29 +105,29 @@ func main() {
 			case <-ticker.C:
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				events, err := redisEventRepo.GetBufferedEvents(ctx, 100)
-				if err != nil || len(events) == 0 {
+				if err != nil {
+					log.Printf("error getting buffered events: %v", err)
 					cancel()
 					continue
 				}
-
-				if err := dbEventRepo.StoreBatch(ctx, events); err != nil {
-					log.Printf("Error storing event batch to DB: %v", err)
-					cancel()
-					continue
-				}
-
-				if err := redisEventRepo.DeleteBufferedEvents(ctx, events); err != nil {
-					log.Printf("Error deleting buffered events from Redis: %v", err)
+				if len(events) > 0 {
+					if err := dbEventRepo.StoreBatch(ctx, events); err != nil {
+						log.Printf("error storing event batch to db: %v", err)
+					} else {
+						if err := redisEventRepo.DeleteBufferedEvents(ctx, events); err != nil {
+							log.Printf("error deleting buffered events from redis: %v", err)
+						}
+					}
 				}
 				cancel()
 			}
 		}
 	}()
 
-	r := chi.NewRouter()
-	r.Use(chiMiddleware.Recoverer)
-	r.Use(middleware.Logging)
-	r.Use(cors.Handler(cors.Options{
+	router := chi.NewRouter()
+	router.Use(chiMiddleware.Recoverer)
+	router.Use(middleware.Logging)
+	router.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"http://*", "https://*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
@@ -134,37 +136,56 @@ func main() {
 		MaxAge:           300,
 	}))
 
+	// Health and Metrics endpoints
+	router.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	})
+	router.Get("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		metrics := struct {
+			ConnectedClients int `json:"connected_clients"`
+		}{
+			ConnectedClients: hub.GetClientCount(),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(metrics)
+	})
+
 	// Public API routes
-	r.Route("/api/v1", func(r chi.Router) {
-		r.Post("/register", userHandler.Register)
-		r.Post("/login", authHandler.Login)
-		r.Post("/refresh", authHandler.Refresh)
-		r.Post("/logout", authHandler.Logout)
+	router.Group(func(r chi.Router) {
+		r.Use(middleware.RateLimit)
+		r.Post("/api/v1/register", userHandler.Register)
+		r.Post("/api/v1/login", authHandler.Login)
+		r.Post("/api/v1/refresh", authHandler.Refresh)
+		r.Post("/api/v1/logout", authHandler.Logout)
 	})
 
 	// Protected API routes
 	authMiddleware := middleware.NewAuthMiddleware(cfg.JWTSecret)
-	r.Route("/api/v1", func(r chi.Router) {
+	router.Group(func(r chi.Router) {
 		r.Use(authMiddleware.Validate)
+		r.Use(middleware.RateLimit)
 
 		// User routes
-		r.Get("/users/{username}", userHandler.GetUserByUsername)
-		r.Put("/users/me/profile", userHandler.UpdateProfile)
+		r.Get("/api/v1/users/{username}", userHandler.GetUserByUsername)
+		r.Put("/api/v1/me", userHandler.UpdateProfile)
 
 		// Friend routes
-		r.Get("/friends", friendHandler.ListFriends)
-		r.Get("/friends/pending", friendHandler.ListPendingRequests)
-		r.Post("/friends/request", friendHandler.SendRequest)
-		r.Put("/friends/request/{requesterID}", friendHandler.RespondToRequest)
-		r.Delete("/friends/{friendID}", friendHandler.Unfriend)
+		r.Post("/api/v1/friends/requests", friendHandler.SendRequest)
+		r.Put("/api/v1/friends/requests/{requesterID}", friendHandler.RespondToRequest)
+		r.Delete("/api/v1/friends/{friendID}", friendHandler.Unfriend)
+		r.Get("/api/v1/friends", friendHandler.ListFriends)
+		r.Get("/api/v1/friends/requests/pending", friendHandler.ListPendingRequests)
 
 		// Group routes
-		r.Post("/groups", groupHandler.CreateGroup)
-		r.Post("/groups/join", groupHandler.JoinGroup)
-		r.Post("/groups/{groupID}/leave", groupHandler.LeaveGroup)
-		r.Post("/groups/{groupID}/members", groupHandler.AddMember)
-		r.Delete("/groups/{groupID}/members/{memberID}", groupHandler.RemoveMember)
-		r.Get("/groups/search", groupHandler.SearchGroups)
+		r.Post("/api/v1/groups", groupHandler.CreateGroup)
+		r.Post("/api/v1/groups/join", groupHandler.JoinGroup)
+		r.Post("/api/v1/groups/{groupID}/leave", groupHandler.LeaveGroup)
+		r.Post("/api/v1/groups/{groupID}/members", groupHandler.AddMember)
+		r.Delete("/api/v1/groups/{groupID}/members/{memberID}", groupHandler.RemoveMember)
+		r.Get("/api/v1/groups/search", groupHandler.SearchGroups)
 
 		// WebSocket route
 		r.Get("/ws", func(w http.ResponseWriter, r *http.Request) {
@@ -173,16 +194,16 @@ func main() {
 	})
 
 	// Serve static files
-	fileServer(r, "/static", http.Dir("web/static"))
-	fileServer(r, cfg.ProfilePicRoute, http.Dir(cfg.ProfilePicDir))
+	fileServer(router, "/static", http.Dir("web/static"))
+	fileServer(router, cfg.ProfilePicRoute, http.Dir(cfg.ProfilePicDir))
 
 	// Serve Web App
-	r.Get("/", webHandler.ServeApp)
+	router.Get("/*", webHandler.ServeApp)
 
 	// Server setup
 	srv := &http.Server{
 		Addr:    ":" + cfg.ServerPort,
-		Handler: r,
+		Handler: router,
 	}
 
 	go func() {
@@ -206,3 +227,4 @@ func main() {
 
 	log.Println("Server exiting")
 }
+

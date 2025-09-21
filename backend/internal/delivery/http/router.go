@@ -1,6 +1,7 @@
 package http
 
 import (
+	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,7 +14,8 @@ import (
 	"chat-app/backend/pkg/config"
 
 	"github.com/go-chi/chi/v5"
-	chiMiddleware "github.com/go-chi/chi/v5/middleware" // Changed alias to chiMiddleware
+	chiMiddleware "github.com/go-chi/chi/v5/middleware"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func NewRouter(
@@ -22,72 +24,85 @@ func NewRouter(
 	userUsecase usecase.UserUsecase,
 	friendUsecase usecase.FriendUsecase,
 	groupUsecase usecase.GroupUsecase,
-	messageUsecase usecase.MessageUsecase, // Added messageUsecase
+	messageUsecase usecase.MessageUsecase,
 	hub *websocket.Hub,
 ) http.Handler {
 	r := chi.NewRouter()
 
+	// Middleware
 	r.Use(chiMiddleware.Logger)
 	r.Use(chiMiddleware.Recoverer)
-	// r.Use(chimiddleware.Heartbeat("/healthz")) // Removed, replaced by explicit handler
+	r.Use(middleware.NewIPRateLimiter(1, 5).Limit)
 
+	// Handlers
 	authHandler := handler.NewAuthHandler(authUsecase)
 	userHandler := handler.NewUserHandler(userUsecase)
 	wsHandler := handler.NewWebSocketHandler(hub)
 	friendHandler := handler.NewFriendHandler(friendUsecase)
 	groupHandler := handler.NewGroupHandler(groupUsecase)
-	messageHandler := handler.NewMessageHandler(messageUsecase) // Added messageHandler
+	messageHandler := handler.NewMessageHandler(messageUsecase)
 
 	// Public routes
-	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) { // Added healthz endpoint
-		w.Write([]byte("OK"))
+	r.Route("/api/v1/auth", func(r chi.Router) {
+		r.Post("/signup", authHandler.SignUp)
+		r.Post("/login", authHandler.Login)
+		r.Post("/refresh", authHandler.Refresh)
 	})
 
-	r.Route("/api/v1", func(r chi.Router) {
+	// Protected routes
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.AuthMiddleware(cfg))
+
+		// WebSocket
+		r.Get("/ws", wsHandler.ServeWS)
+
 		// Auth
-		r.Post("/auth/signup", authHandler.SignUp)
-		r.Post("/auth/login", authHandler.Login)
-		r.Post("/auth/refresh", authHandler.Refresh)
+		r.Post("/api/v1/auth/logout", authHandler.Logout) // Moved back to protected
 
-		// Protected routes
-		r.Group(func(r chi.Router) { // Grouped protected routes
-			r.Use(middleware.AuthMiddleware(cfg))
+		// User routes
+		r.Route("/api/v1/users", func(r chi.Router) {
+			r.Get("/me", userHandler.GetMyProfile)
+			r.Put("/me", userHandler.UpdateMyProfile)
+			r.Get("/{username}", userHandler.GetUserProfile)
+		})
 
-			// WebSocket
-			r.Get("/ws", wsHandler.ServeWS)
+		// Friend routes
+		r.Route("/api/v1/friends", func(r chi.Router) {
+			r.Get("/", friendHandler.ListFriends)
+			r.Post("/requests", friendHandler.SendRequest)
+			r.Get("/requests/pending", friendHandler.GetPendingRequests)
+			r.Put("/requests/{request_id}/accept", friendHandler.AcceptRequest)
+			r.Put("/requests/{request_id}/reject", friendHandler.RejectRequest)
+			r.Delete("/{user_id}", friendHandler.Unfriend)
+		})
 
-			// Auth
-			r.Post("/auth/logout", authHandler.Logout)
+		// Group routes
+		r.Route("/api/v1/groups", func(r chi.Router) {
+			r.Post("/", groupHandler.CreateGroup)
+			r.Get("/search", groupHandler.SearchGroups)
+			r.Get("/me", groupHandler.ListMyGroups)
+			r.Post("/{handle}/join", groupHandler.JoinGroup)
+			r.Get("/{group_id}", groupHandler.GetGroupDetails)
+			r.Put("/{group_id}", groupHandler.UpdateGroup)
+			r.Put("/{group_id}/transfer-ownership", groupHandler.TransferOwnership)
+			r.Post("/{group_id}/members", groupHandler.AddMember)
+			r.Delete("/{group_id}/members/{member_id}", groupHandler.RemoveMember)
+			r.Post("/{group_id}/leave", groupHandler.LeaveGroup)
+		})
 
-			// User routes
-			r.Get("/users/me", userHandler.GetMyProfile)
-			r.Put("/users/me", userHandler.UpdateMyProfile)
-			r.Get("/users/{username}", userHandler.GetUserProfile)
-
-			// Friend routes
-			r.Post("/friends/requests", friendHandler.SendRequest)
-			r.Get("/friends/requests/pending", friendHandler.GetPendingRequests)
-			r.Put("/friends/requests/{request_id}/accept", friendHandler.AcceptRequest)
-			r.Put("/friends/requests/{request_id}/reject", friendHandler.RejectRequest)
-			r.Delete("/friends/{user_id}", friendHandler.Unfriend)
-			r.Get("/friends", friendHandler.ListFriends)
-
-			// Group routes
-			r.Post("/groups", groupHandler.CreateGroup)
-			r.Get("/groups/search", groupHandler.SearchGroups)
-			r.Post("/groups/{handle}/join", groupHandler.JoinGroup)
-			r.Get("/groups/{group_id}", groupHandler.GetGroupDetails)
-			r.Put("/groups/{group_id}", groupHandler.UpdateGroup)
-			r.Put("/groups/{group_id}/transfer-ownership", groupHandler.TransferOwnership)
-			r.Post("/groups/{group_id}/members", groupHandler.AddMember)
-			r.Delete("/groups/{group_id}/members/{member_id}", groupHandler.RemoveMember)
-			r.Post("/groups/{group_id}/leave", groupHandler.LeaveGroup)
-			r.Get("/groups/me", groupHandler.ListMyGroups)
-
-			// Messages routes
-			r.Get("/conversations/{conversation_id}/messages", messageHandler.GetHistory) // Added message history route
+		// Messages routes
+		r.Route("/api/v1/conversations", func(r chi.Router) {
+			r.Get("/{conversation_id}/messages", messageHandler.GetHistory)
 		})
 	})
+
+	// Monitoring endpoints
+	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	})
+	r.Handle("/metrics", promhttp.Handler())
 
 	// Serve frontend files
 	workDir, _ := os.Getwd()
@@ -97,6 +112,8 @@ func NewRouter(
 	return r
 }
 
+// FileServer conveniently sets up a http.FileServer handler to serve
+// static files from a http.FileSystem.
 func FileServer(r chi.Router, path string, root http.FileSystem) {
 	if strings.ContainsAny(path, "{}*") {
 		panic("FileServer does not permit URL parameters.")
@@ -114,8 +131,8 @@ func FileServer(r chi.Router, path string, root http.FileSystem) {
 		// Check if the file exists
 		f, err := root.Open(r.URL.Path)
 		if os.IsNotExist(err) {
-			// If not found, serve index.html for SPA routing
-			http.ServeFile(w, r, filepath.Join(string(root.(http.Dir)), "templates/chat.html")) // Updated path for SPA
+			// If not found, serve the main chat.html for SPA routing
+			http.ServeFile(w, r, filepath.Join(string(root.(http.Dir)), "templates/chat.html"))
 			return
 		}
 		if err != nil {
@@ -123,6 +140,9 @@ func FileServer(r chi.Router, path string, root http.FileSystem) {
 			return
 		}
 		f.Close()
+
+		// Otherwise, serve the file
 		fs.ServeHTTP(w, r)
 	})
 }
+

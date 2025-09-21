@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QuikChat</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 font-sans">
+    <div id="notification-container"></div>
+    <div class="flex h-screen">
+        <!-- Sidebar -->
+        <div class="w-1/4 bg-white border-r border-gray-200 p-4 flex flex-col">
+            <h1 class="text-2xl font-bold mb-4">QuikChat</h1>
+            
+            <!-- Profile Section -->
+            <div id="profile-container" class="mb-4 p-4 bg-gray-50 rounded-lg">
+                <!-- Profile info will be rendered here by JS -->
+            </div>
+
+            <!-- Profile Update Form -->
+            <div class="mb-4 p-4 bg-gray-50 rounded-lg">
+                <h3 class="font-semibold mb-2">Update Profile</h3>
+                <form id="profile-update-form">
+                    <div class="mb-2">
+                        <label for="username" class="block text-sm font-medium text-gray-700">New Username</label>
+                        <input type="text" name="username" id="username" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" placeholder="min 4 chars, a-z0-9_">
+                    </div>
+                    <div class="mb-2">
+                        <label for="password" class="block text-sm font-medium text-gray-700">New Password</label>
+                        <input type="password" name="password" id="password" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" placeholder="min 8 chars">
+                    </div>
+                    <div class="mb-4">
+                        <label for="profile_pic" class="block text-sm font-medium text-gray-700">Profile Picture</label>
+                        <input type="file" name="profile_pic" id="profile_pic" accept="image/png, image/jpeg, image/webp" class="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-600 hover:file:bg-indigo-100">
+                    </div>
+                    <button type="submit" class="w-full bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700">Update</button>
+                </form>
+            </div>
+
+            <div class="mt-auto">
+                <button id="logout-button" class="w-full bg-red-500 text-white py-2 px-4 rounded-md hover:bg-red-600">Logout</button>
+            </div>
+        </div>
+
+        <!-- Main Chat Area -->
+        <div class="w-3/4 flex flex-col">
+            <div class="flex-grow p-4">
+                <h2 class="text-xl font-semibold">Chat Window</h2>
+                <p class="text-gray-500">Select a conversation to start chatting.</p>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="/static/js/main.js"></script>
+</body>
+</html>
+

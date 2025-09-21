@@ -1,90 +1,121 @@
 import * as api from './api.js';
 import * as store from './store.js';
 import * as ui from './ui.js';
+import * as ws from './ws.js';
 
-function handleAuthFormSubmit(event) {
+/**
+ * Handles the submission of login and signup forms.
+ * @param {Event} event
+ */
+async function handleAuthFormSubmit(event) {
     event.preventDefault();
     const form = event.target;
     const isLogin = form.id === 'login-form';
     const username = form.username.value;
     const password = form.password.value;
 
-    const action = isLogin ? api.login(username, password) : api.signup(username, password);
-
-    action
-        .then(() => {
-            if (isLogin) {
-                window.location.href = '/chat';
-            } else {
-                alert('Signup successful! Please log in.');
-                ui.toggleAuthForms();
-                form.reset();
-            }
-        })
-        .catch(err => {
-            ui.showError(form.id, err.message);
-        });
+    try {
+        if (isLogin) {
+            await api.login(username, password);
+        } else {
+            await api.signup(username, password);
+            // Automatically log in after successful signup
+            await api.login(username, password);
+        }
+        window.location.href = '/chat';
+    } catch (error) {
+        ui.showError(form.id, error.message);
+    }
 }
 
-function handleProfileUpdateFormSubmit(event) {
+/**
+ * Handles the submission of the profile update form.
+ * @param {Event} event
+ */
+async function handleProfileUpdateFormSubmit(event) {
     event.preventDefault();
     const form = event.target;
     const formData = new FormData(form);
 
-    // Do not include empty fields
-    if (!formData.get('username')) formData.delete('username');
-    if (!formData.get('password')) formData.delete('password');
-    if (formData.get('profile_pic')?.size === 0) formData.delete('profile_pic');
+    // Remove empty fields from formData
+    for (let [key, value] of [...formData.entries()]) {
+        if (value === '' || (value instanceof File && value.size === 0)) {
+            formData.delete(key);
+        }
+    }
 
-    api.updateProfile(formData)
-        .then(updatedUser => {
-            store.setCurrentUser(updatedUser);
-            ui.renderProfile(updatedUser);
-            ui.showNotification('Profile updated successfully!', 'success');
-            form.reset();
-        })
-        .catch(err => {
-            ui.showNotification(`Update failed: ${err.message}`, 'error');
-        });
+    if (Array.from(formData.keys()).length === 0) {
+        ui.showNotification('No changes to update.', 'info');
+        return;
+    }
+
+    try {
+        const updatedUser = await api.updateProfile(formData);
+        store.setCurrentUser(updatedUser);
+        ui.renderProfile(updatedUser);
+        ui.showNotification('Profile updated successfully!', 'success');
+        form.reset();
+    } catch (error) {
+        ui.showNotification(`Error: ${error.message}`, 'error');
+    }
 }
 
-function handleLogout() {
-    api.logout();
+/**
+ * Handles user logout.
+ */
+async function handleLogout() {
+    await api.logout();
+    store.clearTokens();
     window.location.href = '/';
 }
 
+/**
+ * Initializes the authentication page (login/signup).
+ */
 function initAuthPage() {
-    document.getElementById('login-form')?.addEventListener('submit', handleAuthFormSubmit);
-    document.getElementById('signup-form')?.addEventListener('submit', handleAuthFormSubmit);
-    document.getElementById('show-signup-form')?.addEventListener('click', ui.toggleAuthForms);
-    document.getElementById('show-login-form')?.addEventListener('click', ui.toggleAuthForms);
+    const loginForm = document.getElementById('login-form');
+    const signupForm = document.getElementById('signup-form');
+    const showSignupBtn = document.getElementById('show-signup-form');
+    const showLoginBtn = document.getElementById('show-login-form');
+
+    loginForm?.addEventListener('submit', handleAuthFormSubmit);
+    signupForm?.addEventListener('submit', handleAuthFormSubmit);
+    showSignupBtn?.addEventListener('click', ui.toggleAuthForms);
+    showLoginBtn?.addEventListener('click', ui.toggleAuthForms);
 }
 
+/**
+ * Initializes the main chat page.
+ */
 async function initChatPage() {
-    document.getElementById('logout-button')?.addEventListener('click', handleLogout);
-    document.getElementById('profile-update-form')?.addEventListener('submit', handleProfileUpdateFormSubmit);
+    const logoutButton = document.getElementById('logout-button');
+    const profileUpdateForm = document.getElementById('profile-update-form');
+
+    logoutButton?.addEventListener('click', handleLogout);
+    profileUpdateForm?.addEventListener('submit', handleProfileUpdateFormSubmit);
 
     try {
         const user = await api.getMe();
         store.setCurrentUser(user);
         ui.renderProfile(user);
+        // Connect to WebSocket after successfully fetching user profile
+        ws.connect();
     } catch (error) {
-        console.error('Failed to fetch user profile, redirecting to login.', error);
+        console.error('Failed to fetch user profile:', error);
+        // If fetching fails (e.g., invalid token), redirect to login
         store.clearTokens();
         window.location.href = '/';
     }
 }
 
+// --- Main Execution ---
 document.addEventListener('DOMContentLoaded', () => {
     const path = window.location.pathname;
-    if (path === '/chat') {
-        if (!store.getAccessToken()) {
-            window.location.href = '/';
-            return;
-        }
-        initChatPage();
-    } else {
+
+    if (path === '/' || path === '/index.html') {
         initAuthPage();
+    } else if (path === '/chat' || path === '/chat.html') {
+        initChatPage();
     }
 });
 

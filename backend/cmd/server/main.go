@@ -1,13 +1,17 @@
 package main
 
 import (
-	"fmt"
+	"context"
 	"log"
-	nethttp "net/http"
+	"net/http"
+	"time"
 
 	"chat-app/internal/adapter/localfile"
 	"chat-app/internal/adapter/postgres"
-	delivery "chat-app/internal/delivery/http"
+	"chat-app/internal/adapter/redis"
+	"chat-app/internal/delivery/http/handler"
+	"chat-app/internal/delivery/http/router"
+	"chat-app/internal/delivery/websocket"
 	"chat-app/internal/service"
 	"chat-app/pkg/config"
 )
@@ -19,37 +23,56 @@ func main() {
 	cfg := config.Load()
 
 	// Initialize database connection
-	dbPool, err := postgres.NewDB(cfg.DatabaseURL)
-	if err != nil {
-		log.Fatalf("could not connect to database: %v", err)
-	}
-	defer dbPool.Close()
+	db := postgres.NewDB(cfg.DatabaseURL)
+	// The attempted content removed explicit error handling here, assuming NewDB handles it internally or panics.
+	defer db.Close()
 	log.Println("Database connection established.")
 
+	// Initialize Redis client
+	redisClient := redis.NewClient(cfg.RedisURL)
+
 	// Initialize repositories
-	userRepo := postgres.NewPostgresUserRepository(dbPool)
-	sessionRepo := postgres.NewPostgresSessionRepository(dbPool)
+	userRepo := postgres.NewPostgresUserRepository(db)
+	sessionRepo := postgres.NewPostgresSessionRepository(db)
 	fileRepo, err := localfile.NewLocalFileRepository(cfg.UploadDir)
 	if err != nil {
-		log.Fatalf("could not create file repository: %v", err)
+		log.Fatalf("Failed to create file repository: %v", err)
 	}
+	redisEventRepo := redis.NewRedisEventRepository(redisClient)
+	pgEventRepo := postgres.NewPostgresEventRepository(db)
 
 	// Initialize use cases/services
 	authUsecase := service.NewAuthService(userRepo, sessionRepo, cfg)
 	userUsecase := service.NewUserService(userRepo, fileRepo)
+	eventUsecase := service.NewEventService(redisEventRepo, pgEventRepo, userRepo)
+
+	// Initialize WebSocket Hub
+	hub := websocket.NewHub(eventUsecase)
+	go hub.Run()
+
+	// Start background worker for event persistence
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute) // Run every minute
+		defer ticker.Stop()
+		for {
+			<-ticker.C
+			log.Println("Running background worker to persist events...")
+			eventUsecase.PersistBufferedEvents(context.Background())
+		}
+	}()
 
 	// Initialize router
-	router := delivery.NewRouter(cfg, authUsecase, userUsecase)
+	r := router.NewRouter(cfg, authUsecase, userUsecase, hub)
 
 	// Start server
-	server := &nethttp.Server{
+	server := &http.Server{
 		Addr:    ":" + cfg.Port,
-		Handler: router,
+		Handler: r,
 	}
 
-	log.Printf("Server listening on port %s", cfg.Port)
-	if err := server.ListenAndServe(); err != nil && err != nethttp.ErrServerClosed {
-		log.Fatalf("could not listen on %s: %v\n", cfg.Port, err)
+	log.Printf("Server starting on port %s", cfg.Port)
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatalf("Failed to start server: %v", err)
 	}
 }
 

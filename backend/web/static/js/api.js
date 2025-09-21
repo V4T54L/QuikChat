@@ -17,10 +17,15 @@ import { getAccessToken, setTokens, clearTokens } from './store.js';
 
 const API_BASE = '/api/v1';
 
+/**
+ * Generic request handler
+ * @param {string} endpoint
+ * @param {RequestInit} options
+ * @returns {Promise<any>}
+ */
 async function request(endpoint, options = {}) {
     const url = `${API_BASE}${endpoint}`;
     const headers = {
-        'Content-Type': 'application/json',
         ...options.headers,
     };
 
@@ -29,9 +34,8 @@ async function request(endpoint, options = {}) {
         headers['Authorization'] = `Bearer ${token}`;
     }
 
-    // For FormData, let the browser set the Content-Type
-    if (options.body instanceof FormData) {
-        delete headers['Content-Type'];
+    if (!(options.body instanceof FormData)) {
+        headers['Content-Type'] = 'application/json';
     }
 
     const config = {
@@ -43,16 +47,17 @@ async function request(endpoint, options = {}) {
 
     if (!response.ok) {
         const errorData = await response.json().catch(() => ({ message: response.statusText }));
-        throw new Error(errorData.message || 'An API error occurred');
+        throw new Error(errorData.message || 'An unknown error occurred');
     }
 
     if (response.status === 204) {
-        return null;
+        return;
     }
 
     return response.json();
 }
 
+// --- Auth ---
 /** @returns {Promise<User>} */
 export const signup = (username, password) => request('/auth/signup', {
     method: 'POST',
@@ -61,20 +66,22 @@ export const signup = (username, password) => request('/auth/signup', {
 
 /** @returns {Promise<AuthTokens>} */
 export const login = async (username, password) => {
-    const tokens = await request('/auth/login', {
+    const data = await request('/auth/login', {
         method: 'POST',
         body: JSON.stringify({ username, password }),
     });
-    setTokens(tokens.access_token, tokens.refresh_token);
-    return tokens;
+    if (data.access_token && data.refresh_token) {
+        setTokens(data.access_token, data.refresh_token);
+    }
+    return data;
 };
 
 export const logout = async () => {
-    // Implementation will require refresh token from store
-    // For now, just clear local tokens
+    // In a real app, you'd also call a backend endpoint to invalidate the refresh token
     clearTokens();
 };
 
+// --- Users ---
 /** @returns {Promise<User>} */
 export const getMe = () => request('/users/me');
 
@@ -86,4 +93,27 @@ export const updateProfile = (formData) => request('/users/me', {
 
 /** @returns {Promise<User>} */
 export const getUserByUsername = (username) => request(`/users/${username}`);
+
+
+// --- Friends ---
+export const sendFriendRequest = (username) => request('/friends/requests', {
+    method: 'POST',
+    body: JSON.stringify({ username }),
+});
+
+export const getPendingFriendRequests = () => request('/friends/requests/pending');
+
+export const acceptFriendRequest = (requestID) => request(`/friends/requests/${requestID}/accept`, {
+    method: 'PUT',
+});
+
+export const rejectFriendRequest = (requestID) => request(`/friends/requests/${requestID}/reject`, {
+    method: 'PUT',
+});
+
+export const unfriendUser = (userID) => request(`/friends/${userID}`, {
+    method: 'DELETE',
+});
+
+export const listFriends = () => request('/friends');
 

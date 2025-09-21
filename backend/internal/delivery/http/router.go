@@ -8,38 +8,37 @@ import (
 
 	"chat-app/internal/delivery/http/handler"
 	"chat-app/internal/delivery/http/middleware"
-	ws "chat-app/internal/delivery/websocket"
+	"chat-app/internal/delivery/websocket"
 	"chat-app/internal/usecase"
 	"chat-app/pkg/config"
 
 	"github.com/go-chi/chi/v5"
-	chiMiddleware "github.com/go-chi/chi/v5/middleware"
+	chimiddleware "github.com/go-chi/chi/v5/middleware"
 )
 
-func NewRouter(cfg *config.Config, authUsecase usecase.AuthUsecase, userUsecase usecase.UserUsecase, hub *ws.Hub) http.Handler {
+func NewRouter(cfg *config.Config, authUsecase usecase.AuthUsecase, userUsecase usecase.UserUsecase, friendUsecase usecase.FriendUsecase, hub *websocket.Hub) http.Handler {
 	r := chi.NewRouter()
 
-	r.Use(chiMiddleware.Logger)
-	r.Use(chiMiddleware.Recoverer)
-	r.Use(chiMiddleware.Heartbeat("/healthz"))
+	r.Use(chimiddleware.Logger)
+	r.Use(chimiddleware.Recoverer)
+	r.Use(chimiddleware.Heartbeat("/healthz"))
 
 	// Handlers
 	authHandler := handler.NewAuthHandler(authUsecase)
 	userHandler := handler.NewUserHandler(userUsecase)
 	wsHandler := handler.NewWebSocketHandler(hub)
-	authMiddleware := middleware.AuthMiddleware(cfg)
+	friendHandler := handler.NewFriendHandler(friendUsecase)
 
 	// Public routes
 	r.Route("/api/v1/auth", func(r chi.Router) {
 		r.Post("/signup", authHandler.SignUp)
 		r.Post("/login", authHandler.Login)
 		r.Post("/refresh", authHandler.Refresh)
-		r.Post("/logout", authHandler.Logout)
 	})
 
 	// Protected routes
 	r.Group(func(r chi.Router) {
-		r.Use(authMiddleware)
+		r.Use(middleware.AuthMiddleware(cfg))
 
 		r.Get("/ws", wsHandler.ServeWS)
 
@@ -48,6 +47,17 @@ func NewRouter(cfg *config.Config, authUsecase usecase.AuthUsecase, userUsecase 
 			r.Put("/me", userHandler.UpdateMyProfile)
 			r.Get("/{username}", userHandler.GetUserProfile)
 		})
+
+		r.Route("/api/v1/friends", func(r chi.Router) {
+			r.Post("/requests", friendHandler.SendRequest)
+			r.Get("/requests/pending", friendHandler.GetPendingRequests)
+			r.Put("/requests/{requestID}/accept", friendHandler.AcceptRequest)
+			r.Put("/requests/{requestID}/reject", friendHandler.RejectRequest)
+			r.Delete("/{userID}", friendHandler.Unfriend)
+			r.Get("/", friendHandler.ListFriends)
+		})
+
+		r.Post("/api/v1/auth/logout", authHandler.Logout)
 	})
 
 	// Serve frontend files
@@ -66,7 +76,7 @@ func FileServer(r chi.Router, path string, root http.FileSystem) {
 	fs := http.StripPrefix(path, http.FileServer(root))
 
 	if path != "/" && path[len(path)-1] != '/' {
-		r.Get(path, http.RedirectHandler(path+"/", 301).ServeHTTP)
+		r.Get(path, http.RedirectHandler(path+"/", http.StatusMovedPermanently).ServeHTTP)
 		path += "/"
 	}
 	path += "*"
@@ -75,8 +85,8 @@ func FileServer(r chi.Router, path string, root http.FileSystem) {
 		// Check if the file exists
 		_, err := root.Open(r.URL.Path)
 		if os.IsNotExist(err) {
-			// If not, serve chat.html as the SPA fallback
-			http.ServeFile(w, r, filepath.Join(root.(http.Dir).String(), "templates/chat.html"))
+			// If not, serve chat.html for SPA routing on any sub-path
+			http.ServeFile(w, r, filepath.Join("web", "chat.html"))
 			return
 		}
 		fs.ServeHTTP(w, r)

@@ -1,36 +1,22 @@
 /**
- * @typedef {object} User
- * @property {string} id
- * @property {string} username
- * @property {string} profile_pic_url
- * @property {string} created_at
- * @property {string} updated_at
+ * @typedef {import('./api.js').User} User
+ * @typedef {import('./api.js').Group} Group
  */
 
 /**
  * @typedef {object} FriendRequest
  * @property {string} id
- * @property {string} sender_id
- * @property {string} receiver_id
- * @property {User} Sender // Note: Capitalized 'Sender' as per attempted content's WS event payload
- * @property {User} Receiver // Note: Capitalized 'Receiver' as per attempted content's WS event payload
- */
-
-/**
- * @typedef {object} Group
- * @property {string} id
- * @property {string} handle
- * @property {string} name
- * @property {string} photo_url
- * @property {string} owner_id
+ * @property {User} sender // Changed to User object
+ * @property {User} receiver // Changed to User object
+ * @property {string} status // Added status
  * @property {string} created_at
- * @property {string} updated_at
  */
 
 /**
  * @typedef {object} ActiveChat
- * @property {('friend'|'group'|null)} type
- * @property {string|null} id
+ * @property {'friend'|'group'|null} type
+ * @property {string|null} id - The conversation ID
+ * @property {string|null} name - The display name // Added name
  */
 
 const state = {
@@ -43,9 +29,9 @@ const state = {
     /** @type {FriendRequest[]} */
     pendingRequests: [],
     /** @type {Group[]} */
-    groups: [], // Added groups
+    groups: [],
     /** @type {ActiveChat} */
-    activeChat: { type: null, id: null }, // Added activeChat
+    activeChat: { type: null, id: null, name: null }, // Initialized name
 };
 
 /** @param {User} user */
@@ -78,8 +64,8 @@ export function clearTokens() {
     state.refreshToken = null;
     state.friends = [];
     state.pendingRequests = [];
-    state.groups = []; // Clear groups on logout
-    state.activeChat = { type: null, id: null }; // Clear active chat on logout
+    state.groups = [];
+    state.activeChat = { type: null, id: null, name: null }; // Cleared name
     localStorage.removeItem('accessToken');
     localStorage.removeItem('refreshToken');
 }
@@ -110,3 +96,16 @@ export function getGroups() {
     return state.groups;
 }
 
+/**
+ * @param {'friend'|'group'|null} type
+ * @param {string|null} id
+ * @param {string|null} name
+ */
+export function setActiveChat(type, id, name) { // Added setActiveChat
+    state.activeChat = { type, id, name };
+}
+
+/** @returns {ActiveChat} */
+export function getActiveChat() { // Added getActiveChat
+    return state.activeChat;
+}

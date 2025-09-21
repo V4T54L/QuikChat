@@ -24,7 +24,17 @@
  * @property {string} updated_at
  */
 
-import { getAccessToken, clearTokens } from './store.js';
+/**
+ * @typedef {object} Message
+ * @property {string} id
+ * @property {string} conversation_id
+ * @property {string} sender_id
+ * @property {string} content
+ * @property {string} created_at
+ * @property {User} sender
+ */
+
+import * as store from './store.js'; // Changed import style
 
 const API_BASE = '/api/v1';
 
@@ -40,8 +50,8 @@ async function request(endpoint, options = {}) {
         ...options.headers,
     };
 
-    const token = getAccessToken();
-    if (token) { // Only add Authorization header if token exists
+    const token = store.getAccessToken(); // Used store.getAccessToken()
+    if (token) {
         headers['Authorization'] = `Bearer ${token}`;
     }
 
@@ -57,31 +67,22 @@ async function request(endpoint, options = {}) {
     try {
         const response = await fetch(url, config);
 
-        if (response.status === 401) {
-            clearTokens();
-            window.location.href = '/';
-            throw new Error('Unauthorized');
-        }
-
         if (!response.ok) {
-            const errorText = await response.text();
-            let errorMessage = errorText || `HTTP error! status: ${response.status}`;
-            try {
-                const errorData = JSON.parse(errorText);
-                errorMessage = errorData.message || errorMessage;
-            } catch (e) {
-                // Not a JSON error, use plain text
+            if (response.status === 401) {
+                store.clearTokens(); // Used store.clearTokens()
+                window.location.href = '/';
             }
-            throw new Error(errorMessage);
+            const errorData = await response.json(); // Simplified error parsing
+            throw new Error(errorData.error || 'API request failed');
         }
 
         if (response.status === 204) {
-            return null; // Return null for no content
+            return null;
         }
 
         return response.json();
     } catch (error) {
-        console.error('API request failed:', error);
+        console.error(`API Error on ${endpoint}:`, error); // Updated error logging
         throw error;
     }
 }
@@ -100,7 +101,7 @@ export const login = (username, password) => request('/auth/login', {
 });
 
 export const logout = () => {
-    clearTokens();
+    store.clearTokens(); // Used store.clearTokens()
 };
 
 // --- Users ---
@@ -182,3 +183,12 @@ export const transferGroupOwnership = (groupId, newOwnerId) => request(`/groups/
 /** @returns {Promise<Group[]>} */
 export const listMyGroups = () => request('/groups/me');
 
+// --- Messages ---
+/** @returns {Promise<Message[]>} */
+export const getMessageHistory = (conversationId, before = null, limit = 50) => { // Added message history API
+    let query = `?limit=${limit}`;
+    if (before) {
+        query += `&before=${encodeURIComponent(before)}`;
+    }
+    return request(`/conversations/${conversationId}/messages${query}`);
+};

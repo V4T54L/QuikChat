@@ -3,100 +3,101 @@ import * as store from './store.js';
 import * as ui from './ui.js';
 import * as ws from './ws.js';
 
-// --- Event Handlers ---
-
+// --- AUTH PAGE ---
 async function handleAuthFormSubmit(event) {
     event.preventDefault();
     const form = event.target;
     const isSignUp = form.id === 'signup-form';
     const username = form.username.value;
     const password = form.password.value;
-    const errorEl = form.querySelector('.error-message');
-    if (errorEl) errorEl.classList.add('hidden'); // Hide previous errors
 
     try {
-        let data;
+        const data = isSignUp
+            ? await api.signup(username, password)
+            : await api.login(username, password);
+
         if (isSignUp) {
-            await api.signup(username, password);
-            // After successful signup, automatically log in
-            data = await api.login(username, password);
+            ui.showNotification('Signup successful! Please log in.', 'success');
+            ui.toggleAuthForms();
         } else {
-            data = await api.login(username, password);
+            store.setTokens(data.access_token, data.refresh_token);
+            window.location.href = '/chat.html'; // Redirect to chat.html
         }
-        store.setTokens(data.access_token, data.refresh_token);
-        window.location.href = '/chat';
     } catch (error) {
         ui.showError(form.id, error.message);
     }
 }
 
+function initAuthPage() {
+    document.getElementById('login-form')?.addEventListener('submit', handleAuthFormSubmit);
+    document.getElementById('signup-form')?.addEventListener('submit', handleAuthFormSubmit);
+    document.getElementById('show-signup-form')?.addEventListener('click', ui.toggleAuthForms);
+    document.getElementById('show-login-form')?.addEventListener('click', ui.toggleAuthForms);
+}
+
+// --- CHAT PAGE ---
 async function handleProfileUpdateFormSubmit(event) {
     event.preventDefault();
     const form = event.target;
     const formData = new FormData(form);
 
-    // Don't send empty values
+    // Remove empty fields so they are not sent
     if (!formData.get('username').trim()) formData.delete('username');
     if (!formData.get('password').trim()) formData.delete('password');
-    if (formData.get('profile_pic') && formData.get('profile_pic').size === 0) formData.delete('profile_pic');
+    if (!formData.get('profile_pic').name) formData.delete('profile_pic'); // More robust check for file input
 
     try {
         const updatedUser = await api.updateProfile(formData);
         store.setCurrentUser(updatedUser);
         ui.renderProfile(updatedUser);
         ui.showNotification('Profile updated successfully!', 'success');
-        form.reset(); // Clear form fields after successful update
+        form.reset();
     } catch (error) {
-        ui.showNotification(`Profile update failed: ${error.message}`, 'error');
+        ui.showNotification(`Update failed: ${error.message}`, 'error');
     }
 }
 
 function handleLogout() {
-    api.logout(); // Clears tokens from store and local storage
+    api.logout();
     window.location.href = '/';
 }
 
 async function handleAddFriendSubmit(event) {
     event.preventDefault();
-    const usernameInput = document.getElementById('add-friend-username');
-    const username = usernameInput.value.trim();
-    if (!username) return;
-
+    const form = event.target;
+    const username = form.username.value;
     try {
         await api.sendFriendRequest(username);
         ui.showNotification(`Friend request sent to ${username}`, 'success');
+        form.reset();
         ui.closeModal('add-friend-modal');
-        usernameInput.value = ''; // Clear input field
-        refreshPendingRequests();
+        await refreshPendingRequests();
     } catch (error) {
         ui.showNotification(`Error: ${error.message}`, 'error');
     }
 }
 
 async function handleFriendAction(event) {
-    const button = event.target;
+    const button = event.target.closest('button'); // Use closest for delegation
+    if (!button) return;
+
+    const action = button.dataset.action;
+    const id = button.dataset.id;
+
     try {
-        if (button.classList.contains('accept-request-button')) {
-            const requestId = button.dataset.requestId;
-            await api.acceptFriendRequest(requestId);
+        if (action === 'accept') {
+            await api.acceptFriendRequest(id);
             ui.showNotification('Friend request accepted!', 'success');
-        } else if (button.classList.contains('reject-request-button')) {
-            const requestId = button.dataset.requestId;
-            await api.rejectFriendRequest(requestId);
+        } else if (action === 'reject') {
+            await api.rejectFriendRequest(id);
             ui.showNotification('Friend request rejected.', 'info');
-        } else if (button.classList.contains('unfriend-button')) {
-            const friendId = button.dataset.friendId;
+        } else if (action === 'unfriend') {
             if (confirm('Are you sure you want to unfriend this user?')) {
-                await api.unfriendUser(friendId);
+                await api.unfriendUser(id);
                 ui.showNotification('User unfriended.', 'info');
-            } else {
-                return; // Do not proceed with refresh if cancelled
             }
-        } else {
-            return; // Not a recognized action button
         }
-        refreshFriendsList();
-        refreshPendingRequests();
+        await Promise.all([refreshFriendsList(), refreshPendingRequests()]);
     } catch (error) {
         ui.showNotification(`Error: ${error.message}`, 'error');
     }
@@ -106,108 +107,138 @@ async function handleCreateGroupSubmit(event) {
     event.preventDefault();
     const form = event.target;
     const formData = new FormData(form);
-    // Ensure handle starts with '#'
-    const handleInput = form.querySelector('#create-group-handle');
-    formData.set('handle', `#${handleInput.value.replace(/^#/, '')}`);
-
     try {
-        const group = await api.createGroup(formData);
-        ui.showNotification(`Group "${group.name}" created!`, 'success');
-        ui.closeModal('create-group-modal');
+        await api.createGroup(formData);
+        ui.showNotification('Group created successfully!', 'success');
         form.reset();
-        refreshGroupsList();
+        ui.closeModal('create-group-modal');
+        await refreshGroupsList();
     } catch (error) {
-        ui.showNotification(`Error creating group: ${error.message}`, 'error');
+        ui.showNotification(`Error: ${error.message}`, 'error');
     }
 }
 
+let searchTimeout;
 async function handleSearchGroup(event) {
-    const query = event.target.value.trim();
+    clearTimeout(searchTimeout);
+    const query = event.target.value;
     if (query.length < 2) {
-        document.getElementById('search-group-results').innerHTML = '';
+        ui.renderGroupSearchResults([]);
         return;
     }
-    try {
-        const groups = await api.searchGroups(query);
-        ui.renderGroupSearchResults(groups, handleJoinGroupClick);
-    } catch (error) {
-        ui.showNotification(`Error searching groups: ${error.message}`, 'error');
-    }
+    searchTimeout = setTimeout(async () => {
+        try {
+            const groups = await api.searchGroups(query);
+            ui.renderGroupSearchResults(groups, handleJoinGroupClick);
+        } catch (error) {
+            ui.showNotification(`Search failed: ${error.message}`, 'error');
+        }
+    }, 300);
 }
 
 async function handleJoinGroupClick(event) {
     const handle = event.target.dataset.handle;
     try {
         await api.joinGroup(handle);
-        ui.showNotification(`Successfully joined group #${handle}`, 'success');
-        refreshGroupsList();
-        ui.closeModal('search-group-modal');
+        ui.showNotification(`Joined group ${handle}!`, 'success');
+        await refreshGroupsList();
     } catch (error) {
-        ui.showNotification(`Error joining group: ${error.message}`, 'error');
+        ui.showNotification(`Failed to join: ${error.message}`, 'error');
     }
 }
 
-// --- Data Refresh Functions ---
+async function handleMessageSubmit(event) {
+    event.preventDefault();
+    const form = event.target;
+    const input = form.querySelector('input[name="message"]');
+    const content = input.value.trim();
+    const activeChat = store.getActiveChat();
+
+    if (content && activeChat && activeChat.id) {
+        ws.send('send_message', {
+            conversation_id: activeChat.id,
+            content: content,
+        });
+        input.value = '';
+    }
+}
+
+export async function handleNewMessage(message) {
+    const activeChat = store.getActiveChat();
+    const currentUser = store.getCurrentUser();
+
+    if (activeChat && activeChat.id === message.conversation_id) {
+        ui.appendMessage(message, currentUser.id);
+    } else {
+        const senderName = message.sender?.username || 'Someone';
+        ui.showNotification(`New message from ${senderName}`, 'info');
+        // Potentially update a badge count on the conversation list item
+    }
+}
+
+async function selectChat(event) {
+    const target = event.currentTarget;
+    const type = target.dataset.chatType;
+    const id = target.dataset.chatId;
+    const name = target.dataset.chatName;
+    const pic = target.dataset.chatPic;
+
+    let conversationId = id;
+    if (type === 'friend') {
+        const currentUser = store.getCurrentUser();
+        // Ensure consistent conversation ID for direct messages
+        conversationId = [currentUser.id, id].sort().join(':');
+    }
+
+    store.setActiveChat(type, conversationId, name);
+    ui.renderChatWindow({ type, id, name, pic });
+    ui.clearMessages();
+
+    try {
+        const messages = await api.getMessageHistory(conversationId);
+        if (messages && messages.length > 0) {
+            ui.prependMessages(messages, store.getCurrentUser().id);
+        }
+    } catch (error) {
+        ui.showNotification(`Failed to load messages: ${error.message}`, 'error');
+    }
+}
 
 export async function refreshFriendsList() {
     try {
         const friends = await api.listFriends();
-        store.setFriends(friends);
-        ui.renderFriendList(friends);
+        store.setFriends(friends || []); // Ensure array
+        ui.renderFriendList(friends || [], selectChat); // Pass selectChat handler
     } catch (error) {
         console.error('Failed to refresh friends list:', error);
-        ui.showNotification('Failed to load friends.', 'error');
     }
 }
 
 export async function refreshPendingRequests() {
     try {
         const requests = await api.getPendingFriendRequests();
-        store.setPendingRequests(requests);
-        const currentUser = store.getCurrentUser();
-        if (currentUser) {
-            ui.renderPendingRequests(requests, currentUser.id);
-        }
+        store.setPendingRequests(requests || []); // Ensure array
+        ui.renderPendingRequests(requests || [], store.getCurrentUser().id);
     } catch (error) {
         console.error('Failed to refresh pending requests:', error);
-        ui.showNotification('Failed to load pending requests.', 'error');
     }
 }
 
 export async function refreshGroupsList() {
     try {
         const groups = await api.listMyGroups();
-        store.setGroups(groups);
-        ui.renderGroupList(groups);
+        store.setGroups(groups || []); // Ensure array
+        ui.renderGroupList(groups || [], selectChat); // Pass selectChat handler
     } catch (error) {
         console.error('Failed to refresh groups list:', error);
-        ui.showNotification('Failed to load groups.', 'error');
     }
 }
 
-// --- Initialization ---
-
-function initAuthPage() {
-    document.getElementById('login-form')?.addEventListener('submit', handleAuthFormSubmit);
-    document.getElementById('signup-form')?.addEventListener('submit', handleAuthFormSubmit);
-    document.getElementById('show-signup-form')?.addEventListener('click', ui.toggleAuthForms);
-    document.getElementById('show-login-form')?.addEventListener('click', ui.toggleAuthForms);
-}
-
 async function initChatPage() {
-    // Bind static event listeners
-    document.getElementById('logout-button').addEventListener('click', handleLogout);
-    document.getElementById('profile-update-form').addEventListener('submit', handleProfileUpdateFormSubmit);
-    document.getElementById('add-friend-button').addEventListener('click', () => ui.openModal('add-friend-modal'));
-    document.getElementById('add-friend-form').addEventListener('submit', handleAddFriendSubmit);
-    document.getElementById('create-group-button').addEventListener('click', () => ui.openModal('create-group-modal'));
-    document.getElementById('create-group-form').addEventListener('submit', handleCreateGroupSubmit);
-    document.getElementById('search-group-button').addEventListener('click', () => ui.openModal('search-group-modal'));
-    document.getElementById('search-group-query').addEventListener('input', handleSearchGroup);
-
-    // Bind dynamic event listeners for friend actions (delegation)
-    document.getElementById('friends-container').addEventListener('click', handleFriendAction);
-    document.getElementById('pending-requests-list').addEventListener('click', handleFriendAction); // Listen for accept/reject on pending requests
+    if (!store.getAccessToken()) {
+        window.location.href = '/';
+        return;
+    }
 
     // Initial data fetch
     try {
@@ -221,34 +252,35 @@ async function initChatPage() {
             refreshGroupsList(),
         ]);
 
-        // Connect to WebSocket
         ws.connect();
-
     } catch (error) {
-        console.error('Failed to initialize chat page:', error);
-        ui.showNotification('Failed to load chat data. Please log in again.', 'error');
-        store.clearTokens(); // Clear any invalid tokens
-        window.location.href = '/';
+        console.error('Initialization failed:', error);
+        handleLogout(); // If we can't get user data, log out
     }
+
+    // Bind event listeners
+    document.getElementById('profile-update-form').addEventListener('submit', handleProfileUpdateFormSubmit);
+    document.getElementById('logout-button').addEventListener('click', handleLogout);
+    document.getElementById('add-friend-form').addEventListener('submit', handleAddFriendSubmit);
+    document.getElementById('create-group-form').addEventListener('submit', handleCreateGroupSubmit);
+    document.getElementById('group-search-input').addEventListener('input', handleSearchGroup); // Updated ID
+    document.getElementById('message-form').addEventListener('submit', handleMessageSubmit); // Added message form listener
+
+    // Event delegation for dynamic lists
+    document.getElementById('friends-list').addEventListener('click', handleFriendAction);
+    document.getElementById('pending-requests-list').addEventListener('click', handleFriendAction);
+
+    // Modal triggers
+    document.getElementById('add-friend-btn').addEventListener('click', () => ui.openModal('add-friend-modal')); // Updated ID
+    document.getElementById('create-group-btn').addEventListener('click', () => ui.openModal('create-group-modal')); // Updated ID
+    document.getElementById('find-group-btn').addEventListener('click', () => ui.openModal('search-group-modal')); // Updated ID
 }
 
-// --- Main Execution ---
-
+// --- MAIN ---
 document.addEventListener('DOMContentLoaded', () => {
-    const path = window.location.pathname;
-    if (path === '/' || path === '/index.html') {
-        if (store.getAccessToken()) {
-            // If tokens exist, redirect to chat page
-            window.location.href = '/chat';
-        } else {
-            initAuthPage();
-        }
-    } else if (path.startsWith('/chat')) {
-        if (!store.getAccessToken()) {
-            // If no tokens, redirect to login page
-            window.location.href = '/';
-        } else {
-            initChatPage();
-        }
+    if (window.location.pathname.includes('chat.html')) { // Check for chat.html
+        initChatPage();
+    } else {
+        initAuthPage();
     }
 });

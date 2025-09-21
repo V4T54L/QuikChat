@@ -6,14 +6,14 @@ import (
 	"path/filepath"
 	"strings"
 
-	"chat-app/internal/delivery/http/handler"
-	"chat-app/internal/delivery/http/middleware"
-	"chat-app/internal/delivery/websocket"
-	"chat-app/internal/usecase"
-	"chat-app/pkg/config"
+	"chat-app/backend/internal/delivery/http/handler"
+	"chat-app/backend/internal/delivery/http/middleware"
+	"chat-app/backend/internal/delivery/websocket"
+	"chat-app/backend/internal/usecase"
+	"chat-app/backend/pkg/config"
 
 	"github.com/go-chi/chi/v5"
-	chimiddleware "github.com/go-chi/chi/v5/middleware"
+	chiMiddleware "github.com/go-chi/chi/v5/middleware" // Changed alias to chiMiddleware
 )
 
 func NewRouter(
@@ -22,58 +22,71 @@ func NewRouter(
 	userUsecase usecase.UserUsecase,
 	friendUsecase usecase.FriendUsecase,
 	groupUsecase usecase.GroupUsecase,
+	messageUsecase usecase.MessageUsecase, // Added messageUsecase
 	hub *websocket.Hub,
 ) http.Handler {
 	r := chi.NewRouter()
 
-	r.Use(chimiddleware.Logger)
-	r.Use(chimiddleware.Recoverer)
-	r.Use(chimiddleware.Heartbeat("/healthz"))
+	r.Use(chiMiddleware.Logger)
+	r.Use(chiMiddleware.Recoverer)
+	// r.Use(chimiddleware.Heartbeat("/healthz")) // Removed, replaced by explicit handler
 
 	authHandler := handler.NewAuthHandler(authUsecase)
 	userHandler := handler.NewUserHandler(userUsecase)
 	wsHandler := handler.NewWebSocketHandler(hub)
 	friendHandler := handler.NewFriendHandler(friendUsecase)
 	groupHandler := handler.NewGroupHandler(groupUsecase)
+	messageHandler := handler.NewMessageHandler(messageUsecase) // Added messageHandler
 
-	// Public API routes
+	// Public routes
+	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) { // Added healthz endpoint
+		w.Write([]byte("OK"))
+	})
+
 	r.Route("/api/v1", func(r chi.Router) {
+		// Auth
 		r.Post("/auth/signup", authHandler.SignUp)
 		r.Post("/auth/login", authHandler.Login)
 		r.Post("/auth/refresh", authHandler.Refresh)
-	})
 
-	// Protected API routes
-	r.Route("/api/v1", func(r chi.Router) {
-		r.Use(middleware.AuthMiddleware(cfg))
+		// Protected routes
+		r.Group(func(r chi.Router) { // Grouped protected routes
+			r.Use(middleware.AuthMiddleware(cfg))
 
-		r.Get("/ws", wsHandler.ServeWS)
-		r.Post("/auth/logout", authHandler.Logout)
+			// WebSocket
+			r.Get("/ws", wsHandler.ServeWS)
 
-		// User routes
-		r.Get("/users/me", userHandler.GetMyProfile)
-		r.Put("/users/me", userHandler.UpdateMyProfile)
-		r.Get("/users/{username}", userHandler.GetUserProfile)
+			// Auth
+			r.Post("/auth/logout", authHandler.Logout)
 
-		// Friend routes
-		r.Post("/friends/requests", friendHandler.SendRequest)
-		r.Get("/friends/requests/pending", friendHandler.GetPendingRequests)
-		r.Put("/friends/requests/{request_id}/accept", friendHandler.AcceptRequest)
-		r.Put("/friends/requests/{request_id}/reject", friendHandler.RejectRequest)
-		r.Delete("/friends/{user_id}", friendHandler.Unfriend)
-		r.Get("/friends", friendHandler.ListFriends)
+			// User routes
+			r.Get("/users/me", userHandler.GetMyProfile)
+			r.Put("/users/me", userHandler.UpdateMyProfile)
+			r.Get("/users/{username}", userHandler.GetUserProfile)
 
-		// Group routes
-		r.Post("/groups", groupHandler.CreateGroup)
-		r.Get("/groups/search", groupHandler.SearchGroups)
-		r.Post("/groups/{handle}/join", groupHandler.JoinGroup)
-		r.Get("/groups/{group_id}", groupHandler.GetGroupDetails)
-		r.Put("/groups/{group_id}", groupHandler.UpdateGroup)
-		r.Put("/groups/{group_id}/transfer-ownership", groupHandler.TransferOwnership)
-		r.Post("/groups/{group_id}/members", groupHandler.AddMember)
-		r.Delete("/groups/{group_id}/members/{member_id}", groupHandler.RemoveMember)
-		r.Post("/groups/{group_id}/leave", groupHandler.LeaveGroup)
-		r.Get("/groups/me", groupHandler.ListMyGroups)
+			// Friend routes
+			r.Post("/friends/requests", friendHandler.SendRequest)
+			r.Get("/friends/requests/pending", friendHandler.GetPendingRequests)
+			r.Put("/friends/requests/{request_id}/accept", friendHandler.AcceptRequest)
+			r.Put("/friends/requests/{request_id}/reject", friendHandler.RejectRequest)
+			r.Delete("/friends/{user_id}", friendHandler.Unfriend)
+			r.Get("/friends", friendHandler.ListFriends)
+
+			// Group routes
+			r.Post("/groups", groupHandler.CreateGroup)
+			r.Get("/groups/search", groupHandler.SearchGroups)
+			r.Post("/groups/{handle}/join", groupHandler.JoinGroup)
+			r.Get("/groups/{group_id}", groupHandler.GetGroupDetails)
+			r.Put("/groups/{group_id}", groupHandler.UpdateGroup)
+			r.Put("/groups/{group_id}/transfer-ownership", groupHandler.TransferOwnership)
+			r.Post("/groups/{group_id}/members", groupHandler.AddMember)
+			r.Delete("/groups/{group_id}/members/{member_id}", groupHandler.RemoveMember)
+			r.Post("/groups/{group_id}/leave", groupHandler.LeaveGroup)
+			r.Get("/groups/me", groupHandler.ListMyGroups)
+
+			// Messages routes
+			r.Get("/conversations/{conversation_id}/messages", messageHandler.GetHistory) // Added message history route
+		})
 	})
 
 	// Serve frontend files
@@ -101,8 +114,8 @@ func FileServer(r chi.Router, path string, root http.FileSystem) {
 		// Check if the file exists
 		f, err := root.Open(r.URL.Path)
 		if os.IsNotExist(err) {
-			// If not, serve the main chat.html for SPA routing
-			http.ServeFile(w, r, filepath.Join("web", "templates", "chat.html"))
+			// If not found, serve index.html for SPA routing
+			http.ServeFile(w, r, filepath.Join(string(root.(http.Dir)), "templates/chat.html")) // Updated path for SPA
 			return
 		}
 		if err != nil {
@@ -110,9 +123,6 @@ func FileServer(r chi.Router, path string, root http.FileSystem) {
 			return
 		}
 		f.Close()
-
-		// Otherwise, serve the file
 		fs.ServeHTTP(w, r)
 	})
 }
-

@@ -35,6 +35,12 @@ type Client struct {
 	userID string
 }
 
+// IncomingEvent represents the structure of an event received from a client.
+type IncomingEvent struct {
+	Type    string          `json:"type"`
+	Payload json.RawMessage `json:"payload"`
+}
+
 // readPump pumps messages from the websocket connection to the hub.
 func (c *Client) readPump() {
 	defer func() {
@@ -53,8 +59,18 @@ func (c *Client) readPump() {
 			break
 		}
 		message = bytes.TrimSpace(bytes.Replace(message, newline, space, -1))
-		// For now, we just log incoming messages. In a full app, this would be parsed and handled.
-		log.Printf("Received message from %s: %s", c.userID, message)
+
+		var event IncomingEvent
+		if err := json.Unmarshal(message, &event); err != nil {
+			log.Printf("error unmarshalling incoming event: %v", err)
+			continue
+		}
+
+		c.hub.broadcast <- &HubEvent{
+			Client:  c,
+			Type:    event.Type,
+			Payload: event.Payload,
+		}
 	}
 }
 
@@ -102,11 +118,16 @@ func (c *Client) writePump() {
 
 // SendEvent sends a domain event to the client.
 func (c *Client) SendEvent(event interface{}) {
-	eventBytes, err := json.Marshal(event)
+	b, err := json.Marshal(event)
 	if err != nil {
-		log.Printf("Error marshalling event for client %s: %v", c.userID, err)
+		log.Printf("error marshalling event for client %s: %v", c.userID, err)
 		return
 	}
-	c.send <- eventBytes
+	select {
+	case c.send <- b:
+	default:
+		log.Printf("client %s send channel full, dropping message", c.userID)
+		close(c.send)
+		delete(c.hub.clients, c.userID)
+	}
 }
-

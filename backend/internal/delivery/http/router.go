@@ -7,11 +7,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"chat-app/backend/internal/delivery/http/handler"
-	"chat-app/backend/internal/delivery/http/middleware"
-	"chat-app/backend/internal/delivery/websocket"
-	"chat-app/backend/internal/usecase"
-	"chat-app/backend/pkg/config"
+	"chat-app/internal/delivery/http/handler"
+	"chat-app/internal/delivery/http/middleware"
+	"chat-app/internal/delivery/websocket"
+	"chat-app/internal/usecase"
+	"chat-app/pkg/config"
 
 	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
@@ -32,7 +32,7 @@ func NewRouter(
 	// Middleware
 	r.Use(chiMiddleware.Logger)
 	r.Use(chiMiddleware.Recoverer)
-	r.Use(middleware.NewIPRateLimiter(1, 5).Limit)
+	// r.Use(middleware.NewIPRateLimiter(1, 5).Limit)
 
 	// Handlers
 	authHandler := handler.NewAuthHandler(authUsecase)
@@ -97,7 +97,7 @@ func NewRouter(
 	})
 
 	// Monitoring endpoints
-	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -145,4 +145,3 @@ func FileServer(r chi.Router, path string, root http.FileSystem) {
 		fs.ServeHTTP(w, r)
 	})
 }
-

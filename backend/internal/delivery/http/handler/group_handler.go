@@ -2,6 +2,7 @@ package handler
 
 import (
 	"chat-app/internal/delivery/http/middleware"
+	"chat-app/internal/repository"
 	"chat-app/internal/service"
 	"chat-app/internal/usecase"
 	"encoding/json"
@@ -218,3 +219,8 @@ func handleGroupError(w http.ResponseWriter, err error) {
 	}
 }
 
+func respondWithJSON(w http.ResponseWriter, statusCode int, obj any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(obj)
+}

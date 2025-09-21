@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"time"
 
-	"chat-app/backend/internal/delivery/http/middleware"
-	"chat-app/backend/internal/usecase"
+	"chat-app/internal/delivery/http/middleware"
+	"chat-app/internal/usecase"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -65,4 +65,3 @@ func (h *MessageHandler) GetHistory(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(messages)
 }
-

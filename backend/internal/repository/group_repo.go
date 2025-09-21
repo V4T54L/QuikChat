@@ -3,11 +3,12 @@ package repository
 import (
 	"chat-app/internal/domain"
 	"context"
+	"errors"
 )
 
 var (
-	ErrGroupHandleExists = NewRepositoryError("group handle already exists")
-	ErrGroupMemberExists = NewRepositoryError("user is already a member of this group")
+	ErrGroupHandleExists = errors.New("group handle already exists")
+	ErrGroupMemberExists = errors.New("user is already a member of this group")
 )
 
 type GroupRepository interface {
@@ -23,4 +24,3 @@ type GroupRepository interface {
 	SearchByHandle(ctx context.Context, query string) ([]*domain.Group, error)
 	GetOldestMember(ctx context.Context, groupID, excludeUserID string) (*domain.GroupMember, error)
 }
-

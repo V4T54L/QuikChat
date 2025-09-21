@@ -9,4 +9,3 @@ func NewUUID() string {
 func ParseUUID(s string) (uuid.UUID, error) {
 	return uuid.Parse(s)
 }
-```

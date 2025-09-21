@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"log"
 
-	"chat-app/backend/internal/usecase"
+	"chat-app/internal/usecase"
 )
 
 // HubEvent represents an event received from a client via WebSocket.
@@ -109,4 +109,9 @@ func (h *Hub) BroadcastEvent(ctx context.Context, eventType string, payload inte
 			log.Printf("Error buffering event for offline user %s: %v", recipientID, err)
 		}
 	}
+}
+
+// register the client.
+func (h *Hub) Register(client *Client) {
+	h.register <- client
 }

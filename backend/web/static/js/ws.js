@@ -63,7 +63,7 @@ export function connect() {
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;
-    socket = new WebSocket(`${protocol}//${host}/api/v1/ws`); // Updated WebSocket URL
+    socket = new WebSocket(`${protocol}//${host}/ws`); // Updated WebSocket URL
 
     socket.onopen = () => {
         console.log('WebSocket connected');

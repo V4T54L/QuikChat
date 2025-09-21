@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"chat-app/backend/internal/domain"
-	"chat-app/backend/internal/repository"
+	"chat-app/internal/domain"
+	"chat-app/internal/repository"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -69,4 +69,3 @@ func (r *postgresMessageRepository) GetByConversationID(ctx context.Context, con
 
 	return messages, nil
 }
-

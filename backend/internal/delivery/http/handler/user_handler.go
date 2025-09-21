@@ -5,6 +5,7 @@ import (
 	"chat-app/internal/service"
 	"chat-app/internal/usecase"
 	"encoding/json"
+	"log"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -27,6 +28,7 @@ func (h *UserHandler) GetMyProfile(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.userUsecase.GetProfile(r.Context(), userID)
 	if err != nil {
+		log.Println("GetMyProfile error: ", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -43,6 +45,7 @@ func (h *UserHandler) GetUserProfile(w http.ResponseWriter, r *http.Request) {
 	username := chi.URLParam(r, "username")
 	user, err := h.userUsecase.GetUserByUsername(r.Context(), username)
 	if err != nil {
+		log.Println("GetUserProfile error: ", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -109,6 +112,7 @@ func (h *UserHandler) UpdateMyProfile(w http.ResponseWriter, r *http.Request) {
 
 	updatedUser, err := h.userUsecase.GetProfile(r.Context(), userID)
 	if err != nil {
+		log.Println("UpdateMyProfile error: ", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -117,4 +121,3 @@ func (h *UserHandler) UpdateMyProfile(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(updatedUser)
 }
-

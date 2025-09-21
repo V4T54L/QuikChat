@@ -3,15 +3,14 @@ package service
 import (
 	"context"
 	"errors"
-	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
 
-	"chat-app/backend/internal/domain"
-	"chat-app/backend/internal/repository"
-	"chat-app/backend/internal/usecase"
-	"chat-app/backend/pkg/util"
+	"chat-app/internal/domain"
+	"chat-app/internal/repository"
+	"chat-app/internal/usecase"
+	"chat-app/pkg/util"
 )
 
 var (
@@ -20,10 +19,10 @@ var (
 )
 
 type messageService struct {
-	messageRepo repository.MessageRepository
-	userRepo    repository.UserRepository
-	groupRepo   repository.GroupRepository
-	eventUsecase  usecase.EventUsecase
+	messageRepo  repository.MessageRepository
+	userRepo     repository.UserRepository
+	groupRepo    repository.GroupRepository
+	eventUsecase usecase.EventUsecase
 }
 
 func NewMessageService(
@@ -33,10 +32,10 @@ func NewMessageService(
 	eventUsecase usecase.EventUsecase,
 ) usecase.MessageUsecase {
 	return &messageService{
-		messageRepo: messageRepo,
-		userRepo:    userRepo,
-		groupRepo:   groupRepo,
-		eventUsecase:  eventUsecase,
+		messageRepo:  messageRepo,
+		userRepo:     userRepo,
+		groupRepo:    groupRepo,
+		eventUsecase: eventUsecase,
 	}
 }
 
@@ -157,4 +156,3 @@ func (s *messageService) isUserConversationMember(ctx context.Context, userID, c
 	}
 	return userID == ids[0] || userID == ids[1], nil
 }
-

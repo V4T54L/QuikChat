@@ -1,10 +1,10 @@
 package middleware
 
 import (
+	"log"
 	"net"
 	"net/http"
 	"sync"
-	"time"
 
 	"golang.org/x/time/rate"
 )
@@ -52,6 +52,7 @@ func (i *IPRateLimiter) Limit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip, _, err := net.SplitHostPort(r.RemoteAddr)
 		if err != nil {
+			log.Println("(i *IPRateLimiter) Limit error: ", err)
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 			return
 		}
@@ -65,4 +66,3 @@ func (i *IPRateLimiter) Limit(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
-

@@ -35,14 +35,23 @@ type Client struct {
 	userID string
 }
 
+func NewClient(hub *Hub, conn *websocket.Conn, send chan []byte, userID string) *Client {
+	return &Client{
+		hub:    hub,
+		conn:   conn,
+		send:   send,
+		userID: userID,
+	}
+}
+
 // IncomingEvent represents the structure of an event received from a client.
 type IncomingEvent struct {
 	Type    string          `json:"type"`
 	Payload json.RawMessage `json:"payload"`
 }
 
-// readPump pumps messages from the websocket connection to the hub.
-func (c *Client) readPump() {
+// ReadPump pumps messages from the websocket connection to the hub.
+func (c *Client) ReadPump() {
 	defer func() {
 		c.hub.unregister <- c
 		c.conn.Close()
@@ -74,8 +83,8 @@ func (c *Client) readPump() {
 	}
 }
 
-// writePump pumps messages from the hub to the websocket connection.
-func (c *Client) writePump() {
+// WritePump pumps messages from the hub to the websocket connection.
+func (c *Client) WritePump() {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		ticker.Stop()

@@ -39,17 +39,11 @@ func (h *WebSocketHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := &ws.Client{
-		hub:    h.hub,
-		conn:   conn,
-		send:   make(chan []byte, 256),
-		userID: userID,
-	}
-	client.hub.register <- client
+	client := ws.NewClient(h.hub, conn, make(chan []byte, 256), userID)
+	h.hub.Register(client)
 
 	// Allow collection of memory referenced by the caller by doing all work in
 	// new goroutines.
-	go client.writePump()
-	go client.readPump()
+	go client.WritePump()
+	go client.ReadPump()
 }
-

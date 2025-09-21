@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 type localFileRepository struct {
@@ -44,4 +43,3 @@ func (r *localFileRepository) SaveProfilePicture(_ context.Context, fileData []b
 
 	return filename, nil
 }
-

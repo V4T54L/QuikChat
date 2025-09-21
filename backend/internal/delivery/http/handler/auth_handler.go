@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 
 	"chat-app/internal/service"
@@ -103,7 +104,8 @@ func handleAuthError(w http.ResponseWriter, err error) {
 		errors.Is(err, service.ErrSessionExpired):
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 	default:
+		log.Println("Default error: ", err)
+		log.Println("Default error: ", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
 }
-

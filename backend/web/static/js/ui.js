@@ -100,7 +100,7 @@ export function renderProfile(user) {
     const container = document.getElementById('profile-container');
     if (!container || !user) return;
     container.innerHTML = `
-        <img src="${user.profile_pic_url || 'https://via.placeholder.com/40'}" alt="My Profile" class="w-10 h-10 rounded-full mr-3">
+        <img src="${user.profile_pic_url || 'https://placehold.co/40'}" alt="My Profile" class="w-10 h-10 rounded-full mr-3">
         <div>
             <p class="font-semibold text-white">${user.username}</p>
             <p class="text-xs text-gray-400">Joined: ${new Date(user.created_at).toLocaleDateString()}</p>
@@ -121,9 +121,9 @@ export function renderFriendList(friends, selectChatHandler) { // Added selectCh
     }
     list.innerHTML = friends.map(friend => `
         <li class="flex items-center justify-between p-2 hover:bg-gray-700 rounded-md cursor-pointer"
-            data-chat-type="friend" data-chat-id="${friend.id}" data-chat-name="${friend.username}" data-chat-pic="${friend.profile_pic_url || 'https://via.placeholder.com/40'}">
+            data-chat-type="friend" data-chat-id="${friend.id}" data-chat-name="${friend.username}" data-chat-pic="${friend.profile_pic_url || 'https://placehold.co/40'}">
             <div class="flex items-center flex-grow">
-                <img src="${friend.profile_pic_url || 'https://via.placeholder.com/40'}" alt="${friend.username}" class="w-8 h-8 rounded-full mr-3">
+                <img src="${friend.profile_pic_url || 'https://placehold.co/40'}" alt="${friend.username}" class="w-8 h-8 rounded-full mr-3">
                 <span class="text-gray-300">${friend.username}</span>
             </div>
             <button data-action="unfriend" data-id="${friend.id}" class="text-red-500 hover:text-red-400 text-xs p-1">Unfriend</button>
@@ -145,8 +145,8 @@ export function renderGroupList(groups, selectChatHandler) { // Added selectChat
     }
     list.innerHTML = groups.map(group => `
         <li class="flex items-center p-2 hover:bg-gray-700 rounded-md cursor-pointer"
-            data-chat-type="group" data-chat-id="${group.id}" data-chat-name="${group.name}" data-chat-pic="${group.photo_url || 'https://via.placeholder.com/40'}">
-            <img src="${group.photo_url || 'https://via.placeholder.com/40'}" alt="${group.name}" class="w-8 h-8 rounded-full mr-3">
+            data-chat-type="group" data-chat-id="${group.id}" data-chat-name="${group.name}" data-chat-pic="${group.photo_url || 'https://placehold.co/40'}">
+            <img src="${group.photo_url || 'https://placehold.co/40'}" alt="${group.name}" class="w-8 h-8 rounded-full mr-3">
             <div>
                 <p class="text-gray-300">${group.name}</p>
                 <p class="text-xs text-gray-500">${group.handle}</p>
@@ -204,7 +204,7 @@ export function renderGroupSearchResults(groups, joinHandler) {
     resultsContainer.innerHTML = groups.map(group => `
         <div class="flex items-center justify-between p-2 border-b border-gray-600">
             <div class="flex items-center">
-                <img src="${group.photo_url || 'https://via.placeholder.com/40'}" alt="${group.name}" class="w-10 h-10 rounded-full mr-3">
+                <img src="${group.photo_url || 'https://placehold.co/40'}" alt="${group.name}" class="w-10 h-10 rounded-full mr-3">
                 <div>
                     <p class="font-semibold text-white">${group.name}</p>
                     <p class="text-sm text-gray-400">${group.handle}</p>
@@ -240,7 +240,7 @@ export function renderChatWindow(chat) { // New function for rendering chat wind
     container.classList.remove('hidden');
     welcomeScreen.classList.add('hidden');
     header.innerHTML = `
-        <img src="${chat.pic || 'https://via.placeholder.com/40'}" alt="${chat.name}" class="w-10 h-10 rounded-full mr-4">
+        <img src="${chat.pic || 'https://placehold.co/40'}" alt="${chat.name}" class="w-10 h-10 rounded-full mr-4">
         <h2 class="text-xl font-semibold text-white">${chat.name}</h2>
     `;
 }
@@ -256,7 +256,7 @@ function renderMessage(message, currentUserID) { // New function for rendering a
 
     return `
         <div class="flex items-start mb-4 ${isOwnMessage ? 'justify-end' : ''}">
-            ${!isOwnMessage ? `<img src="${message.sender?.profile_pic_url || 'https://via.placeholder.com/40'}" class="w-8 h-8 rounded-full mr-3">` : ''}
+            ${!isOwnMessage ? `<img src="${message.sender?.profile_pic_url || 'https://placehold.co/40'}" class="w-8 h-8 rounded-full mr-3">` : ''}
             <div class="flex flex-col ${isOwnMessage ? 'items-end' : 'items-start'}">
                 <div class="${isOwnMessage ? 'bg-blue-600' : 'bg-gray-700'} text-white p-3 rounded-lg max-w-xs lg:max-w-md">
                     <p class="text-sm">${message.content}</p>

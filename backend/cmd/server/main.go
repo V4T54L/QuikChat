@@ -7,16 +7,14 @@ import (
 	"net/http"
 	"time"
 
-	"chat-app/backend/internal/adapter/localfile"
-	"chat-app/backend/internal/adapter/postgres"
-	"chat-app/backend/internal/adapter/redis"
-	"chat-app/backend/internal/delivery/websocket"
-	"chat-app/backend/internal/repository" // Added from attempted
-	"chat-app/backend/internal/service"
-	"chat-app/backend/internal/usecase" // Added from attempted
-	"chat-app/backend/pkg/config"
+	"chat-app/internal/adapter/localfile"
+	"chat-app/internal/adapter/postgres"
+	"chat-app/internal/adapter/redis"
+	"chat-app/internal/delivery/websocket" // Added from attempted
+	"chat-app/internal/service"            // Added from attempted
+	"chat-app/pkg/config"
 
-	httpRouter "chat-app/backend/internal/delivery/http" // Alias for custom http router
+	httpRouter "chat-app/internal/delivery/http" // Alias for custom http router
 )
 
 func main() {
@@ -63,15 +61,11 @@ func main() {
 	go func() {
 		ticker := time.NewTicker(1 * time.Minute)
 		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				log.Println("Running background job: Persisting buffered events...") // Updated log message
-				if err := eventUsecase.PersistBufferedEvents(context.Background()); err != nil {
-					log.Printf("Error persisting buffered events: %v", err)
-				}
-			}
+		for event := range ticker.C {
+			log.Println("Running background job: Persisting buffered events... :", event) // Updated log message
+			eventUsecase.PersistBufferedEvents(context.Background())
 		}
+
 	}()
 
 	// Initialize router

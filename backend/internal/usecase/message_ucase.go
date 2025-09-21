@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"chat-app/backend/internal/domain"
+	"chat-app/internal/domain"
 )
 
 type SendMessageInput struct {
@@ -16,4 +16,3 @@ type MessageUsecase interface {
 	SendMessage(ctx context.Context, senderID string, input SendMessageInput) (*domain.Message, error)
 	GetMessageHistory(ctx context.Context, userID, conversationID string, before time.Time, limit int) ([]*domain.Message, error)
 }
-

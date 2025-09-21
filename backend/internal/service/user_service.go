@@ -9,7 +9,6 @@ import (
 	"errors"
 	"io"
 	"mime/multipart"
-	"regexp"
 )
 
 var (
@@ -122,15 +121,3 @@ func (s *userService) UpdateProfilePicture(ctx context.Context, userID string, f
 
 	return user.ProfilePicURL, nil
 }
-
-func validateUsername(username string) error {
-	if len(username) < 4 || len(username) > 50 {
-		return ErrInvalidUsername
-	}
-	match, _ := regexp.MatchString("^[a-z0-9_]+$")
-	if !match {
-		return ErrInvalidUsername
-	}
-	return nil
-}
-

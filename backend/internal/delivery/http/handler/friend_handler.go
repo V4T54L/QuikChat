@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 
 	"chat-app/internal/delivery/http/middleware"
@@ -141,7 +142,7 @@ func handleFriendError(w http.ResponseWriter, err error) {
 	case errors.Is(err, service.ErrFriendRequestNotReceiver):
 		http.Error(w, err.Error(), http.StatusForbidden)
 	default:
+		log.Println("Default error: ", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
 }
-
